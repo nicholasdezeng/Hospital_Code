@@ -24,6 +24,7 @@ paths:
   # 原始 FASTQ（DADA2 输入）
   raw_fastq_dir: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data"
   sample_manifest: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data/data_number_sorted.xlsx"
+  sample_manifest_output: "data/microbiome/sample_manifest.csv"
 
   # DADA2 完成后生成（统计分析输入）
   microbiome_asv: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/asv_table.csv"
