@@ -19,8 +19,8 @@
         ├── data/                               ← 原始 FASTQ
         │   ├── A1_1.fq, A1_2.fq, ...
         │   ├── 1-65_1.fq, 1-65_2.fq, ...
-        │   ├── data_number.xlsx                ← FASTQ名 → 样本编号 对照
-        │   └── data_number_sorted.xlsx
+        │   ├── data_number.xlsx
+        │   └── data_number_sorted.xlsx     ← 样本对照表（用这个）
         └── microbiome/                         ← DADA2 输出目录（待创建）
             ├── asv_table.csv
             └── taxonomy.csv
@@ -90,7 +90,7 @@ ls          # 应看到 run_analysis.py、src/、config.server.yaml 等
 |------|------------|------|
 | 临床 Excel | `.../data/临床样本收集表3.xlsx` | ✅ 已有 |
 | 原始 FASTQ | `.../data/data/*.fq` | ✅ 已有 |
-| 样本对照表 | `.../data/data/data_number.xlsx` | ✅ 已有 |
+| 样本对照表 | `.../data/data/data_number_sorted.xlsx` | ✅ 已有 |
 | 研究方案 docx | `.../data/AICU呼吸道菌群预后研究——完整研究方案与预期结果.docx` | ✅ 已有 |
 | 原始数据 zip | `.../data/梁星宝59个原始数据 -260604汇总.zip` | ✅ 已有（备份） |
 | ASV 丰度表 | `.../data/microbiome/asv_table.csv` | ⬜ DADA2 后生成 |
@@ -141,7 +141,7 @@ cat output/run_summary.json
 
 ```
 步骤 1  [已有]  FASTQ 在 data/data/
-步骤 2  [待做]  读 data_number.xlsx，弄清 FASTQ 名 → A1/A2 对应关系
+步骤 2  [待做]  读 data_number_sorted.xlsx，弄清 FASTQ 名 → A1/A2 对应关系
 步骤 3  [待做]  DADA2：FASTQ → asv_table.csv + taxonomy.csv
 步骤 4  [待做]  把 ASV 表样本名改成临床编号（A1、A2…）
 步骤 5  [push后] python run_analysis.py --config config.server.yaml
@@ -181,7 +181,7 @@ ls /media/cxhlab/backup/Hospital_Data_Analysis/data/data/*_1.fq | wc -l
 # 2. 对照表结构
 python3 -c "
 import pandas as pd
-df = pd.read_excel('/media/cxhlab/backup/Hospital_Data_Analysis/data/data/data_number.xlsx')
+df = pd.read_excel('/media/cxhlab/backup/Hospital_Data_Analysis/data/data/data_number_sorted.xlsx')
 print(df.columns.tolist())
 print(df.head())
 "

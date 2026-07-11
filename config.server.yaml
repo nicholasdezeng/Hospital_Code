@@ -8,7 +8,7 @@
 #     ├── data/                                               ← FASTQ + 样本对照表
 #     │   ├── A1_1.fq, 1-65_1.fq, ...
 #     │   ├── data_number.xlsx
-#     │   └── data_number_sorted.xlsx
+#     │   └── data_number_sorted.xlsx   ← 样本对照表（用这个）
 #     └── data/microbiome/                                    ← DADA2 输出（待生成）
 #         ├── asv_table.csv
 #         └── taxonomy.csv
@@ -23,7 +23,7 @@ paths:
 
   # 原始 FASTQ（DADA2 输入）
   raw_fastq_dir: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data"
-  sample_manifest: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data/data_number.xlsx"
+  sample_manifest: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data/data_number_sorted.xlsx"
 
   # DADA2 完成后生成（统计分析输入）
   microbiome_asv: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/asv_table.csv"
