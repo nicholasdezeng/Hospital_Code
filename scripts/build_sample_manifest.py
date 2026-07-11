@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """从 data_number_sorted.xlsx 生成 FASTQ → 临床样本编号 对照表。
 
-表格结构说明（data_number_sorted.xlsx）：
-  每行左右两列样本信息：
-  - 左块：样本原始名称(a1…)、样本编号(D2604-xxxx)、数据编号(FASTQ前缀)
-  - 右块：样本原始名称.1(A1…)、样本编号.1(D2604-xxxx)、数据编号.1(FASTQ前缀)
+表格结构（每行左右两块，是两个不同样本）：
+  左块：样本原始名称(a1…) → 数据编号(FASTQ前缀)   对应临床表小写 a1/a2/...
+  右块：样本原始名称.1(A1…) → 数据编号.1(FASTQ前缀) 对应临床表大写 A1/A2/...
 
-  临床表使用 A1/A2/... 编号，对应右块「样本原始名称.1」。
-  FASTQ 文件名前缀对应「数据编号」或「数据编号.1」（如 55-63_1.fq → 55-63）。
+临床表 59 例 = 小写 a1–a43（左块）+ 大写 A1–A16（右块），编号大小写不可混用。
 
 用法:
   python scripts/build_sample_manifest.py --config config.server.yaml
-  python scripts/build_sample_manifest.py --manifest /path/to/data_number_sorted.xlsx --output data/microbiome/sample_manifest.csv
 """
 
 from __future__ import annotations
@@ -39,40 +36,33 @@ def parse_data_number_sorted(path: Path) -> pd.DataFrame:
     records: list[dict] = []
 
     for idx, row in raw.iterrows():
-        # 右块：临床分析主用（A1, A2, ...）
+        # 右块 → 临床大写 A1, A2, ...
         fastq_r = _clean(row.get("数据编号.1"))
-        clinical_r = _clean(row.get("样本原始名称.1")) or _clean(row.get("样本编号.1"))
+        clinical_r = _clean(row.get("样本原始名称.1"))
         lab_r = _clean(row.get("样本编号.1"))
         if fastq_r and clinical_r:
             records.append(
                 {
                     "fastq_prefix": fastq_r,
-                    "clinical_sample_id": clinical_r.upper() if clinical_r.startswith(("a", "A")) and len(clinical_r) <= 4 else clinical_r,
+                    "clinical_sample_id": clinical_r,  # 保留大写 A1
                     "lab_id": lab_r,
-                    "original_name": _clean(row.get("样本原始名称.1")),
+                    "original_name": clinical_r,
                     "block": "right",
                     "excel_row": idx,
                 }
             )
 
-        # 左块：补充样本（部分 FASTQ 仅出现在左块）
+        # 左块 → 临床小写 a1, a2, ...
         fastq_l = _clean(row.get("数据编号"))
-        original_l = _clean(row.get("样本原始名称"))
+        clinical_l = _clean(row.get("样本原始名称"))
         lab_l = _clean(row.get("样本编号"))
-        if fastq_l:
-            # 左块原始名 a1/a2 不等于临床 A1；优先用 FASTQ 名本身若为 A 编号
-            if fastq_l.upper().startswith("A") and fastq_l[1:].isdigit():
-                clinical_l = fastq_l.upper()
-            elif original_l:
-                clinical_l = original_l.upper()
-            else:
-                clinical_l = fastq_l
+        if fastq_l and clinical_l:
             records.append(
                 {
                     "fastq_prefix": fastq_l,
-                    "clinical_sample_id": clinical_l,
+                    "clinical_sample_id": clinical_l,  # 保留小写 a1
                     "lab_id": lab_l,
-                    "original_name": original_l,
+                    "original_name": clinical_l,
                     "block": "left",
                     "excel_row": idx,
                 }
@@ -82,32 +72,32 @@ def parse_data_number_sorted(path: Path) -> pd.DataFrame:
     if manifest.empty:
         raise ValueError(f"未能从 {path} 解析出任何样本记录")
 
-    # 同一 FASTQ 前缀出现多次时，右块优先（与临床表一致）
+    # 每个 FASTQ 只保留一条；同一 FASTQ 在左右块都出现时右块优先
     manifest["priority"] = manifest["block"].map({"right": 0, "left": 1})
     manifest = manifest.sort_values(["fastq_prefix", "priority", "excel_row"])
+    duplicates = manifest[manifest.duplicated(subset=["fastq_prefix"], keep=False)].copy()
     deduped = manifest.drop_duplicates(subset=["fastq_prefix"], keep="first").copy()
-    duplicates = manifest[manifest.duplicated(subset=["fastq_prefix"], keep=False)]
 
-    deduped = deduped.sort_values("clinical_sample_id").reset_index(drop=True)
+    # 检查：一个临床编号是否对应多个 FASTQ
+    multi = deduped.groupby("clinical_sample_id").filter(lambda g: len(g) > 1)
     deduped.attrs["duplicates"] = duplicates
-    deduped.attrs["raw_count"] = len(manifest)
-    return deduped
+    deduped.attrs["multi_clinical"] = multi
+    deduped.attrs["raw_count"] = len(records)
+    return deduped.sort_values(["block", "clinical_sample_id"]).reset_index(drop=True)
 
 
 def check_fastq_files(manifest: pd.DataFrame, fastq_dir: Path) -> pd.DataFrame:
     if not fastq_dir.exists():
-        manifest["fastq_r1_exists"] = False
-        manifest["fastq_r2_exists"] = False
-        return manifest
+        return manifest.assign(fastq_r1_exists=False, fastq_r2_exists=False, fastq_paired=False)
 
     r1_files = {p.name.rsplit("_", 1)[0] for p in fastq_dir.glob("*_1.fq")}
     r2_files = {p.name.rsplit("_", 1)[0] for p in fastq_dir.glob("*_2.fq")}
 
-    manifest = manifest.copy()
-    manifest["fastq_r1_exists"] = manifest["fastq_prefix"].isin(r1_files)
-    manifest["fastq_r2_exists"] = manifest["fastq_prefix"].isin(r2_files)
-    manifest["fastq_paired"] = manifest["fastq_r1_exists"] & manifest["fastq_r2_exists"]
-    return manifest
+    out = manifest.copy()
+    out["fastq_r1_exists"] = out["fastq_prefix"].isin(r1_files)
+    out["fastq_r2_exists"] = out["fastq_prefix"].isin(r2_files)
+    out["fastq_paired"] = out["fastq_r1_exists"] & out["fastq_r2_exists"]
+    return out
 
 
 def load_config(config_path: Path) -> dict:
@@ -117,10 +107,10 @@ def load_config(config_path: Path) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="构建 FASTQ → 临床样本编号 对照表")
-    parser.add_argument("--config", default=None, help="config.server.yaml 路径")
-    parser.add_argument("--manifest", default=None, help="data_number_sorted.xlsx 路径")
-    parser.add_argument("--fastq-dir", default=None, help="FASTQ 目录")
-    parser.add_argument("--output", default=None, help="输出 CSV 路径")
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--manifest", default=None)
+    parser.add_argument("--fastq-dir", default=None)
+    parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
     if args.config:
@@ -145,36 +135,35 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(output, index=False, encoding="utf-8-sig")
 
+    n_lower = manifest["clinical_sample_id"].str[0].str.islower().sum()
+    n_upper = manifest["clinical_sample_id"].str[0].str.isupper().sum()
+
     print(f"\n解析完成，写入: {output}")
-    print(f"  总记录（去重前）: {manifest.attrs.get('raw_count', '?')}")
+    print(f"  解析记录（去重前）: {manifest.attrs.get('raw_count', '?')}")
     print(f"  唯一 FASTQ 前缀: {len(manifest)}")
+    print(f"  小写临床编号 (a*): {n_lower}")
+    print(f"  大写临床编号 (A*): {n_upper}")
 
     if "fastq_paired" in manifest.columns:
-        paired = manifest["fastq_paired"].sum()
-        print(f"  成对 FASTQ 存在: {paired}/{len(manifest)}")
-        missing = manifest[~manifest["fastq_paired"]]
-        if len(missing):
-            print(f"\n  ⚠ 缺少成对 FASTQ 的样本 ({len(missing)}):")
-            print(missing[["fastq_prefix", "clinical_sample_id", "block"]].to_string(index=False))
+        print(f"  成对 FASTQ 存在: {manifest['fastq_paired'].sum()}/{len(manifest)}")
 
-        fastq_on_disk = set()
-        if fastq_dir and fastq_dir.exists():
-            fastq_on_disk = {p.name.rsplit("_", 1)[0] for p in fastq_dir.glob("*_1.fq")}
-        mapped = set(manifest["fastq_prefix"])
-        unmapped_fastq = sorted(fastq_on_disk - mapped)
-        if unmapped_fastq:
-            print(f"\n  ⚠ 磁盘上有但未写入对照表的 FASTQ ({len(unmapped_fastq)}):")
-            print(", ".join(unmapped_fastq[:20]), "..." if len(unmapped_fastq) > 20 else "")
-
-    dup = manifest.attrs.get("duplicates")
-    if dup is not None and len(dup):
-        print(f"\n  ℹ 重复 FASTQ 前缀（已按右块优先去重）: {dup['fastq_prefix'].nunique()} 个")
+    multi = manifest.attrs.get("multi_clinical")
+    if multi is not None and len(multi):
+        print(f"\n  ⚠ 同一临床编号对应多个 FASTQ ({multi['clinical_sample_id'].nunique()} 个编号):")
+        print(multi[["clinical_sample_id", "fastq_prefix", "block"]].to_string(index=False))
 
     print("\n前 10 行预览:")
     cols = ["fastq_prefix", "clinical_sample_id", "block", "lab_id"]
     if "fastq_paired" in manifest.columns:
         cols.append("fastq_paired")
     print(manifest[cols].head(10).to_string(index=False))
+
+    print("\n右块示例 A4 → 55-63:")
+    sub = manifest[(manifest["clinical_sample_id"] == "A4") & (manifest["block"] == "right")]
+    if not sub.empty:
+        print(sub[cols].to_string(index=False))
+    else:
+        print("  (未找到)")
 
 
 if __name__ == "__main__":
