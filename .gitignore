@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 运行产物（不提交）
+output/
+output_archive/
+.mplconfig/
+
+# 演示/真实菌群数据（体积大，不入库）
+data/microbiome/*.csv
+!data/microbiome/README.md
+
+# 系统
+.DS_Store
+*.swp
+
+# 本地配置（可选保留 example）
+config.local.yaml

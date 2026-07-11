@@ -1,0 +1,54 @@
+# 服务器专用配置 — pop-os
+# 用法: python run_analysis.py --config config.server.yaml
+#
+# 服务器目录结构（2026-07 确认）:
+#   /media/cxhlab/backup/Hospital_Code/                         ← 代码（本仓库）
+#   /media/cxhlab/backup/Hospital_Data_Analysis/data/           ← 数据根目录
+#     ├── 临床样本收集表3.xlsx
+#     ├── data/                                               ← FASTQ + 样本对照表
+#     │   ├── A1_1.fq, 1-65_1.fq, ...
+#     │   ├── data_number.xlsx
+#     │   └── data_number_sorted.xlsx
+#     └── data/microbiome/                                    ← DADA2 输出（待生成）
+#         ├── asv_table.csv
+#         └── taxonomy.csv
+
+project:
+  name: "AICU呼吸道菌群预后研究"
+  output_dir: "output"
+
+paths:
+  # 临床表（与代码仓平级，在 data/ 根目录下）
+  clinical_data: "/media/cxhlab/backup/Hospital_Data_Analysis/data/临床样本收集表3.xlsx"
+
+  # 原始 FASTQ（DADA2 输入）
+  raw_fastq_dir: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data"
+  sample_manifest: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data/data_number.xlsx"
+
+  # DADA2 完成后生成（统计分析输入）
+  microbiome_asv: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/asv_table.csv"
+  taxonomy: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/taxonomy.csv"
+
+outcomes:
+  extubation_time_col: "extubation_time_min"
+  icu_stay_col: "icu_stay_min"
+  adverse_event_col: "adverse_event"
+  qor15_col: "qor15"
+
+grouping:
+  extubation_split: "median"
+  extubation_fixed_min: 68.5
+  crp_threshold: 10.0
+
+analysis:
+  random_seed: 42
+  permutations: 999
+  bootstrap_n: 1000
+  lda_threshold: 2.0
+  fdr_alpha: 0.05
+  use_demo_microbiome: false   # 服务器：有真实数据后必须 false
+
+visualization:
+  dpi: 300
+  fig_format: "png"
+  style: "seaborn-v0_8-whitegrid"

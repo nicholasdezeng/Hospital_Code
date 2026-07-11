@@ -1,0 +1,33 @@
+# AICU 呼吸道菌群预后研究 — 分析配置
+project:
+  name: "AICU呼吸道菌群预后研究"
+  output_dir: "output"
+
+paths:
+  clinical_data: "../ALL/临床样本收集表3.xlsx"
+  microbiome_asv: "data/microbiome/asv_table.csv"
+  taxonomy: "data/microbiome/taxonomy.csv"
+
+outcomes:
+  extubation_time_col: "extubation_time_min"
+  icu_stay_col: "icu_stay_min"
+  adverse_event_col: "adverse_event"
+  qor15_col: "qor15"
+
+grouping:
+  extubation_split: "median"  # median | fixed
+  extubation_fixed_min: 68.5
+  crp_threshold: 10.0  # mg/L
+
+analysis:
+  random_seed: 42
+  permutations: 999
+  bootstrap_n: 1000
+  lda_threshold: 2.0
+  fdr_alpha: 0.05
+  use_demo_microbiome: true  # 无真实 ASV 数据时自动生成演示数据
+
+visualization:
+  dpi: 300
+  fig_format: "png"
+  style: "seaborn-v0_8-whitegrid"
