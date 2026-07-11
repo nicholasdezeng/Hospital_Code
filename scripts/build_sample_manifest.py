@@ -117,7 +117,10 @@ def main():
         cfg = load_config(Path(args.config))
         manifest_path = Path(cfg["paths"]["sample_manifest"])
         fastq_dir = Path(cfg["paths"]["raw_fastq_dir"])
-        output = Path(args.output or ROOT / "data/microbiome/sample_manifest.csv")
+        out_cfg = cfg["paths"].get("sample_manifest_output", "data/microbiome/sample_manifest.csv")
+        output = Path(out_cfg)
+        if not output.is_absolute():
+            output = ROOT / output
     else:
         if not args.manifest:
             parser.error("请指定 --config 或 --manifest")

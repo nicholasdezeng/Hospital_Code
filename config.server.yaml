@@ -24,11 +24,15 @@ paths:
   # 原始 FASTQ（DADA2 输入）
   raw_fastq_dir: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data"
   sample_manifest: "/media/cxhlab/backup/Hospital_Data_Analysis/data/data/data_number_sorted.xlsx"
-  sample_manifest_output: "data/microbiome/sample_manifest.csv"
+  sample_manifest_output: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/sample_manifest.csv"
 
   # DADA2 完成后生成（统计分析输入）
   microbiome_asv: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/asv_table.csv"
   taxonomy: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/taxonomy.csv"
+
+  # SILVA V3-V4 训练集（DADA2 注释用，按服务器实际路径修改）
+  silva_ref: "/media/cxhlab/backup/databases/silva/silva138.2_v3v4_train_set.rds"
+  silva_species: "/media/cxhlab/backup/databases/silva/silva138.2_v3v4_species_assignment.rds"
 
 outcomes:
   extubation_time_col: "extubation_time_min"
