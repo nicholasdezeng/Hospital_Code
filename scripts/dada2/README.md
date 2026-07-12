@@ -1,65 +1,57 @@
 # DADA2 生信处理
 
-## 作用
+## SILVA 数据库下载（重要：旧 .rds 链接已失效）
 
-将 `data/data/*.fq` 原始测序数据处理为统计分析所需的：
+SILVA 138.2 官方 DADA2 格式已改为 **`.fa.gz`**，来源：
 
-- `asv_table.csv` — 行 = 临床样本 ID（a1/A1/...），列 = ASV，值 = counts
-- `taxonomy.csv` — 行 = ASV ID，列 = Genus/Phylum/...
-
-`sample_manifest.csv` 已在构建时把 FASTQ 前缀映射为临床编号，DADA2 输出直接使用临床 ID，**无需再重命名**。
-
-## 前置条件
+- 官方页面：https://benjjneb.github.io/dada2/training.html
+- Zenodo：https://zenodo.org/records/14169026
 
 ```bash
-# R 包
-R -e "if (!require('BiocManager')) install.packages('BiocManager'); BiocManager::install('dada2')"
-R -e "install.packages('yaml')"
+mkdir -p /media/cxhlab/backup/databases/silva
+cd /media/cxhlab/backup/databases/silva
 
-# SILVA V3-V4 训练集（示例路径，按服务器实际位置配置）
-# 下载: https://benjjneb.github.io/dada2/training.html
+# 属级注释（必须，约 140 MB）
+wget -O silva_nr99_v138.2_toGenus_trainset.fa.gz \
+  "https://zenodo.org/records/14169026/files/silva_nr99_v138.2_toGenus_trainset.fa.gz?download=1"
+
+# 种级注释（可选，约 70 MB）
+wget -O silva_v138.2_assignSpecies.fa.gz \
+  "https://zenodo.org/records/14169026/files/silva_v138.2_assignSpecies.fa.gz?download=1"
 ```
 
-在 `config.server.yaml` 中配置（可选，无则只出 ASV 不注释）：
+`config.server.yaml` 中对应路径：
 
 ```yaml
-paths:
-  silva_ref: "/path/to/silva138.2_v3v4_train_set.rds"
-  silva_species: "/path/to/silva138.2_v3v4_species_assignment.rds"
+silva_ref: "/media/cxhlab/backup/databases/silva/silva_nr99_v138.2_toGenus_trainset.fa.gz"
+silva_species: "/media/cxhlab/backup/databases/silva/silva_v138.2_assignSpecies.fa.gz"
 ```
 
-## 运行
+## 运行流程
 
 ```bash
 cd /media/cxhlab/backup/Hospital_Code
 
-# 1. 确认样本对照表已生成
+# 1. 样本对照（已完成可跳过）
 python scripts/build_sample_manifest.py --config config.server.yaml
-python scripts/check_sample_alignment.py --config config.server.yaml
 
-# 2. 跑 DADA2（耗时较长，建议 screen/tmux）
+# 2. DADA2（若 asv_table.csv 已有可跳过）
 Rscript scripts/dada2/run_dada2.R --config config.server.yaml
 
-# 3. 统计分析
+# 3. 仅物种注释（推荐：已有 ASV 表时只跑这步）
+Rscript scripts/dada2/assign_taxonomy.R --config config.server.yaml
+
+# 4. 统计分析
 python run_analysis.py --config config.server.yaml
 ```
 
-## 参数调整
-
-`run_dada2.R` 中 `truncLen`、`maxEE` 为 V3-V4 常用默认值。若过滤后 reads 过少，可先跑：
-
-```bash
-Rscript scripts/dada2/check_read_quality.R --config config.server.yaml
-```
-
-（质量预检脚本可按需添加。）
-
-## 输出位置
+## 输出文件
 
 ```
-/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/
-├── sample_manifest.csv    ← 样本对照（已有）
-├── asv_table.csv          ← DADA2 输出
-├── taxonomy.csv           ← SILVA 注释
-└── filtered/              ← 过滤后 FASTQ（中间文件）
+.../data/microbiome/
+├── sample_manifest.csv
+├── asv_table.csv
+├── taxonomy.csv
+├── seqtab.rds          # 中间文件，供 assign_taxonomy.R 使用
+└── filtered/           # 过滤后 FASTQ
 ```

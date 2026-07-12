@@ -7,7 +7,7 @@
 #   Rscript scripts/dada2/run_dada2.R --config config.server.yaml
 #
 # 依赖: R packages dada2, Biostrings
-# SILVA: 需提前下载 V3-V4 训练集 .rds 并配置 silva_ref 路径
+# SILVA: 下载 Zenodo 14169026 的 .fa.gz 文件（见 scripts/dada2/README.md）
 
 suppressPackageStartupMessages({
   if (!requireNamespace("dada2", quietly = TRUE)) {
@@ -34,8 +34,8 @@ out_asv <- cfg$paths$microbiome_asv
 out_tax <- cfg$paths$taxonomy
 out_dir <- dirname(out_asv)
 
-silva_ref <- if (!is.null(cfg$paths$silva_ref)) cfg$paths$silva_ref else "/media/cxhlab/backup/databases/silva/silva138.2_v3v4_train_set.rds"
-silva_species <- if (!is.null(cfg$paths$silva_species)) cfg$paths$silva_species else sub("train_set", "species_assignment", silva_ref)
+silva_ref <- if (!is.null(cfg$paths$silva_ref)) cfg$paths$silva_ref else "/media/cxhlab/backup/databases/silva/silva_nr99_v138.2_toGenus_trainset.fa.gz"
+silva_species <- if (!is.null(cfg$paths$silva_species)) cfg$paths$silva_species else "/media/cxhlab/backup/databases/silva/silva_v138.2_assignSpecies.fa.gz"
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -114,8 +114,6 @@ taxa <- assignTaxonomy(seqtab, silva_ref, multithread = TRUE, minBoot = 50)
 if (file.exists(silva_species)) {
   taxa <- addSpecies(taxa, silva_species)
 }
-
-# 输出 ASV 表
 asv_ids <- paste0("ASV_", seq_len(ncol(seqtab)))
 colnames(seqtab) <- asv_ids
 asv_df <- as.data.frame(seqtab)

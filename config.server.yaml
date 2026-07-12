@@ -30,9 +30,9 @@ paths:
   microbiome_asv: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/asv_table.csv"
   taxonomy: "/media/cxhlab/backup/Hospital_Data_Analysis/data/microbiome/taxonomy.csv"
 
-  # SILVA V3-V4 训练集（DADA2 注释用，按服务器实际路径修改）
-  silva_ref: "/media/cxhlab/backup/databases/silva/silva138.2_v3v4_train_set.rds"
-  silva_species: "/media/cxhlab/backup/databases/silva/silva138.2_v3v4_species_assignment.rds"
+  # SILVA 138.2 训练集（DADA2 1.35+ 官方 .fa.gz 格式，Zenodo 14169026）
+  silva_ref: "/media/cxhlab/backup/databases/silva/silva_nr99_v138.2_toGenus_trainset.fa.gz"
+  silva_species: "/media/cxhlab/backup/databases/silva/silva_v138.2_assignSpecies.fa.gz"
 
 outcomes:
   extubation_time_col: "extubation_time_min"
