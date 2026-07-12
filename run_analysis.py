@@ -49,8 +49,12 @@ def main(config_path: str = "config.yaml"):
     )
     print(f"      纳入样本: {len(clinical)} 例")
 
-    asv_path = root / cfg["paths"]["microbiome_asv"]
-    tax_path = root / cfg["paths"]["taxonomy"]
+    asv_path = Path(cfg["paths"]["microbiome_asv"])
+    tax_path = Path(cfg["paths"]["taxonomy"])
+    if not asv_path.is_absolute():
+        asv_path = root / asv_path
+    if not tax_path.is_absolute():
+        tax_path = root / tax_path
     use_demo = cfg["analysis"]["use_demo_microbiome"]
 
     if asv_path.exists() and tax_path.exists():

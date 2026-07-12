@@ -96,9 +96,14 @@ rownames(seqtab) <- sample_ids
 cat("ASV 表维度:", dim(seqtab), "\n")
 
 cat("\n[6/6] SILVA 物种注释...\n")
+seqtab_rds <- file.path(out_dir, "seqtab.rds")
+saveRDS(seqtab, seqtab_rds)
+cat("  已保存中间文件:", seqtab_rds, "\n")
+
 if (!file.exists(silva_ref)) {
   cat("⚠ 未找到 SILVA 训练集:", silva_ref, "\n")
-  cat("  跳过注释，仅输出 ASV 表。请配置 paths.silva_ref 后重新运行。\n")
+  cat("  跳过注释，仅输出 ASV 表。\n")
+  cat("  下载 SILVA 后运行: Rscript scripts/dada2/assign_taxonomy.R --config config.server.yaml\n")
   asv_df <- as.data.frame(seqtab)
   write.csv(asv_df, out_asv, row.names = TRUE)
   cat("已写入:", out_asv, "\n")
