@@ -47,14 +47,15 @@ qc:
 
 sensitivity:
   enabled: true
+  strict_qc:
+    min_raw_reads: 5000
+    max_observed_asv: 500
   relaxed_qc:
     min_raw_reads: 1000
     min_assigned_reads: 50
     min_observed_asv: 5
     max_observed_asv: 1200
-    max_shannon: 7.0
     asv_min_prevalence: 0.03
-    remove_unassigned_taxonomy: false
 
 visualization:
   dpi: 300

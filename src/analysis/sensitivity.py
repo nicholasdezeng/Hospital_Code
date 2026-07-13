@@ -13,6 +13,7 @@ from src.preprocessing import (
     filter_microbiome_qc,
     merge_microbiome,
 )
+from src.utils.microbiome import aggregate_taxonomy, relative_abundance
 
 
 def run_sensitivity_cohorts(
@@ -29,7 +30,8 @@ def run_sensitivity_cohorts(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     profiles = {
-        "strict": cfg.get("qc", {}),
+        "strict": {**cfg.get("qc", {}), **sens_cfg.get("strict_qc", {})},
+        "main": cfg.get("qc", {}),
         "relaxed": sens_cfg.get("relaxed_qc", {}),
     }
 
@@ -54,7 +56,8 @@ def run_sensitivity_cohorts(
             continue
 
         merged = merge_microbiome(clin.loc[common], asv_q.loc[common], tax_q)
-        n_genera = merged.attrs["rel_abund"].shape[1]
+        rel_genus = relative_abundance(aggregate_taxonomy(merged.attrs["asv"], tax_q, "Genus"))
+        n_genera = rel_genus.shape[1]
         from scipy import stats
 
         e = merged.loc[merged.extubation_group == "Early", "shannon"]

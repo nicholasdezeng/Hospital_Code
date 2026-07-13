@@ -61,20 +61,29 @@ inclusion:
   exclude_history: true
   max_clinical_missing_frac: 0.20
 
-# 主分析 QC（原始 reads 先检，再过滤 ASV；保留未注释以维持丰度）
+# 主分析 QC — 推荐配置（平衡样本量与质量，目标 n≈34-40）
+# 上次 strict (min_raw_reads=3000) 仅保留 24 例；relaxed 可保留 34 例
 qc:
   enabled: true
-  min_raw_reads: 3000
-  min_assigned_reads: 200
-  min_observed_asv: 10
-  max_observed_asv: 800
-  max_shannon: 6.5
-  asv_min_prevalence: 0.05
+  min_raw_reads: 1500
+  min_assigned_reads: 100
+  min_observed_asv: 8
+  max_observed_asv: 1100
+  max_shannon: 7.0
+  asv_min_prevalence: 0.03
   remove_unassigned_taxonomy: false
 
-# 敏感性分析：与主分析并行的放宽 QC 队列
+# 敏感性分析：与主分析对比的更严格 / 更宽松队列
 sensitivity:
   enabled: true
+  strict_qc:
+    min_raw_reads: 3000
+    min_assigned_reads: 200
+    min_observed_asv: 10
+    max_observed_asv: 800
+    max_shannon: 6.5
+    asv_min_prevalence: 0.05
+    remove_unassigned_taxonomy: false
   relaxed_qc:
     min_raw_reads: 1000
     min_assigned_reads: 50
