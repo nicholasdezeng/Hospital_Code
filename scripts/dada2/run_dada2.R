@@ -57,9 +57,18 @@ if (!all(file.exists(fnFs)) || !all(file.exists(fnRs))) {
 
 cat("样本数:", nrow(manifest), "\n")
 
-# V3-V4 常用裁剪参数（可按预检结果调整）
-truncLen <- c(240, 200)
-maxEE <- c(2, 2)
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+dada2_cfg <- cfg$dada2 %||% list()
+truncLen <- unlist(dada2_cfg$truncLen %||% c(240, 200))
+maxEE <- unlist(dada2_cfg$maxEE %||% c(2, 2))
+minOverlap <- as.integer(dada2_cfg$minOverlap %||% 12L)
+maxMismatch <- as.integer(dada2_cfg$maxMismatch %||% 0L)
+minBoot <- as.integer(dada2_cfg$minBoot %||% 50L)
+
+cat("DADA2 参数: truncLen=", paste(truncLen, collapse = ","),
+    " maxEE=", paste(maxEE, collapse = ","),
+    " minOverlap=", minOverlap, " maxMismatch=", maxMismatch, "\n", sep = "")
 
 cat("\n[1/6] 质量过滤...\n")
 filt_dir <- file.path(out_dir, "filtered")
@@ -90,10 +99,26 @@ dadaFs <- dada(derepFs, err = errF, multithread = TRUE)
 dadaRs <- dada(derepRs, err = errR, multithread = TRUE)
 
 cat("\n[5/6] 合并双端...\n")
-mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs)
+mergers <- mergePairs(
+  dadaFs, derepFs, dadaRs, derepRs,
+  minOverlap = minOverlap,
+  maxMismatch = maxMismatch,
+  verbose = TRUE
+)
 seqtab <- makeSequenceTable(mergers)
 rownames(seqtab) <- sample_ids
 cat("ASV 表维度:", dim(seqtab), "\n")
+cat("各样本 reads 摘要 (min/median/max):\n")
+rs <- rowSums(seqtab)
+print(summary(rs))
+read_track <- data.frame(
+  sample_id = sample_ids,
+  raw_reads = out[, 1],
+  filt_reads = out[, 2],
+  merged_reads = as.integer(rs[sample_ids])
+)
+write.csv(read_track, file.path(out_dir, "dada2_read_tracking.csv"), row.names = FALSE)
+cat("  已保存:", file.path(out_dir, "dada2_read_tracking.csv"), "\n")
 
 cat("\n[6/6] SILVA 物种注释...\n")
 seqtab_rds <- file.path(out_dir, "seqtab.rds")
@@ -110,7 +135,7 @@ if (!file.exists(silva_ref)) {
   quit(save = "no", status = 0)
 }
 
-taxa <- assignTaxonomy(seqtab, silva_ref, multithread = TRUE, minBoot = 50)
+taxa <- assignTaxonomy(seqtab, silva_ref, multithread = TRUE, minBoot = minBoot)
 if (file.exists(silva_species)) {
   taxa <- addSpecies(taxa, silva_species)
 }
