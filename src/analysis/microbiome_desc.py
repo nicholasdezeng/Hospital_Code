@@ -12,6 +12,8 @@ import pandas as pd
 from matplotlib.ticker import PercentFormatter
 
 from src.utils.microbiome import (
+    PHYLUM_MIN_MAX_PCT,
+    PHYLUM_MIN_MEAN_PCT,
     aggregate_taxonomy,
     collapse_phyla_for_plot,
     rarefaction_curve,
@@ -67,8 +69,8 @@ def _pick_top_genera(rel_genus: pd.DataFrame, n: int = 15) -> list[str]:
     return selected[:n]
 
 
-def _plot_panel_a(ax, plot_phylum: pd.DataFrame, groups: pd.Series) -> list[mpatches.Patch]:
-    """门水平堆叠柱状图，纵轴 0–100%，按拔管时间排序。"""
+def _plot_panel_a(ax, plot_phylum: pd.DataFrame, groups: pd.Series, phylum_means: pd.Series) -> list[mpatches.Patch]:
+    """门水平堆叠柱状图，纵轴 0–100%；图例仅含实际绘制的门并标注队列均值 (%)。"""
     n = len(plot_phylum)
     x = np.arange(n)
     bottom = np.zeros(n)
@@ -79,7 +81,9 @@ def _plot_panel_a(ax, plot_phylum: pd.DataFrame, groups: pd.Series) -> list[mpat
         color = PHylum_COLORS.get(phylum, PHylum_COLORS["Other"])
         ax.bar(x, vals, bottom=bottom, color=color, width=0.92, edgecolor="none", linewidth=0)
         bottom += vals
-        handles.append(mpatches.Patch(facecolor=color, edgecolor="none", label=phylum))
+        mean_pct = phylum_means.get(phylum, 0.0)
+        label = f"{phylum} ({mean_pct:.1f}%)"
+        handles.append(mpatches.Patch(facecolor=color, edgecolor="none", label=label))
 
     n_early = int((groups == "Early").sum())
     if 0 < n_early < n:
@@ -209,8 +213,12 @@ def run_figure1(clinical: pd.DataFrame, output_dir: Path) -> dict:
 
     order = clinical.sort_values("extubation_time_min").index
     groups = clinical.loc[order, "extubation_group"]
-    plot_phylum = collapse_phyla_for_plot(rel_phylum.loc[order])
+    plot_phylum, phylum_full = collapse_phyla_for_plot(rel_phylum.loc[order])
+    phylum_means = phylum_full["mean_pct"]
     top_genera = _pick_top_genera(rel_genus, n=15)
+
+    hidden = phylum_full[(phylum_full["mean_pct"] < PHYLUM_MIN_MEAN_PCT) & (phylum_full["max_pct"] < PHYLUM_MIN_MAX_PCT)]
+    hidden_names = [idx for idx in hidden.index if idx not in plot_phylum.columns]
 
     # SCI 双栏宽度 ~180 mm ≈ 7.1 inch；三面板横向排列
     fig = plt.figure(figsize=(11.5, 4.8))
@@ -219,7 +227,13 @@ def run_figure1(clinical: pd.DataFrame, output_dir: Path) -> dict:
     ax_b = fig.add_subplot(gs[0, 1])
     ax_c = fig.add_subplot(gs[0, 2])
 
-    phylum_handles = _plot_panel_a(ax_a, plot_phylum, groups)
+    phylum_handles = _plot_panel_a(ax_a, plot_phylum, groups, phylum_means)
+    if hidden_names:
+        note = "Not shown (<0.5% mean): " + ", ".join(hidden_names)
+        ax_a.text(
+            0.01, 0.02, note, transform=ax_a.transAxes, fontsize=6.5, va="bottom", ha="left",
+            color="#666666", style="italic",
+        )
     _plot_panel_b(ax_b, rel_genus, clinical, top_genera)
     _plot_panel_c(ax_c, asv.loc[order], clinical.loc[order])
 
@@ -245,12 +259,13 @@ def run_figure1(clinical: pd.DataFrame, output_dir: Path) -> dict:
     )
     save_figure(fig, output_dir, "figure1_microbiome_overview")
 
-    phylum_means = (plot_phylum.mean() * 100).round(2).to_dict()
+    phylum_full.to_csv(output_dir / "figure1_phylum_summary.csv", encoding="utf-8-sig")
     summary = {
         "n_asv": asv.shape[1],
         "n_genera": rel_genus.shape[1],
         "n_samples": len(order),
-        "phylum_means_pct": phylum_means,
+        "phyla_plotted": plot_phylum.columns.tolist(),
+        "phyla_hidden": hidden_names,
         "top_genera": top_genera,
     }
     pd.Series(summary).to_csv(output_dir / "figure1_summary.csv", encoding="utf-8-sig")

@@ -96,8 +96,13 @@ PHYLUM_STACK_ORDER = [
     "Bacteroidetes",
     "Actinobacteria",
     "Fusobacteria",
+    "Unassigned",
     "Other",
 ]
+
+# 图 1A：低于此均值（%）且样本内峰值也低的门不绘制、不进图例
+PHYLUM_MIN_MEAN_PCT = 0.5
+PHYLUM_MIN_MAX_PCT = 1.0
 
 
 def normalize_phylum_name(name: str) -> str:
@@ -109,19 +114,50 @@ def normalize_phylum_name(name: str) -> str:
     return PHYLUM_DISPLAY_NAMES.get(text, text)
 
 
-def collapse_phyla_for_plot(rel_phylum: pd.DataFrame) -> pd.DataFrame:
-    """合并同类门名，固定 SCI 图例顺序（含 Other）。"""
+def collapse_phyla_for_plot(
+    rel_phylum: pd.DataFrame,
+    *,
+    min_mean_pct: float = PHYLUM_MIN_MEAN_PCT,
+    min_max_pct: float = PHYLUM_MIN_MAX_PCT,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """合并同类门名，仅保留图中有可见丰度的门；返回 (绘图矩阵, 全部门均值表)。"""
     rel = rel_phylum.copy()
     rel.columns = [normalize_phylum_name(c) for c in rel.columns]
     rel = rel.T.groupby(level=0).sum().T
 
     out = pd.DataFrame(index=rel.index)
-    for phylum in PHYLUM_STACK_ORDER[:-1]:
+    for phylum in ("Firmicutes", "Proteobacteria", "Bacteroidetes", "Actinobacteria", "Fusobacteria"):
         out[phylum] = rel[phylum] if phylum in rel.columns else 0.0
-    other_cols = [c for c in rel.columns if c not in PHYLUM_STACK_ORDER[:-1]]
-    out["Other"] = rel[other_cols].sum(axis=1) if other_cols else (1.0 - out.sum(axis=1)).clip(lower=0)
+
+    if "Unassigned" in rel.columns:
+        out["Unassigned"] = rel["Unassigned"]
+    else:
+        out["Unassigned"] = 0.0
+
+    named = set(out.columns)
+    other_cols = [c for c in rel.columns if c not in named]
+    out["Other"] = rel[other_cols].sum(axis=1) if other_cols else 0.0
+
     row_sum = out.sum(axis=1).replace(0, np.nan)
-    return out.div(row_sum, axis=0).fillna(0)
+    out = out.div(row_sum, axis=0).fillna(0)
+
+    means_pct = (out.mean() * 100).rename("mean_pct")
+    max_pct = (out.max() * 100).rename("max_pct")
+    full_summary = pd.concat([means_pct, max_pct], axis=1)
+
+    visible = []
+    for col in out.columns:
+        m = full_summary.loc[col, "mean_pct"]
+        mx = full_summary.loc[col, "max_pct"]
+        if m >= min_mean_pct or mx >= min_max_pct:
+            visible.append(col)
+
+    if not visible:
+        visible = [out.mean().idxmax()]
+
+    # 堆叠顺序：小比例在下方，大比例在上方（便于看到微量 Firmicutes）
+    stack_order = out[visible].mean().sort_values(ascending=True).index.tolist()
+    return out[stack_order], full_summary
 
 
 def aggregate_taxonomy(asv: pd.DataFrame, taxonomy: pd.DataFrame, level: str) -> pd.DataFrame:

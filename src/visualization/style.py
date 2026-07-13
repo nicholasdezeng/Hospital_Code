@@ -30,7 +30,8 @@ PHylum_COLORS = {
     "Fusobacteria": "#CCB974",
     "Fusobacteriota": "#CCB974",
     "Unknown": "#E15759",
-    "Other": "#BAB0AC",
+    "Unassigned": "#BAB0AC",
+    "Other": "#D4D4D4",
 }
 
 # 多面板图默认边距（避免 suptitle / 图例 / 轴标签重叠）
