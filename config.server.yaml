@@ -49,11 +49,11 @@ analysis:
   random_seed: 42
   permutations: 999
   bootstrap_n: 1000
+  permutation_n: 500
   lda_threshold: 2.0
   fdr_alpha: 0.05
-  use_demo_microbiome: false   # 服务器：有真实数据后必须 false
+  use_demo_microbiome: false
 
-# 纳入排除标准（研究方案）
 inclusion:
   enabled: true
   require_extubation_time: true
@@ -61,15 +61,28 @@ inclusion:
   exclude_history: true
   max_clinical_missing_frac: 0.20
 
-# 菌群 QC（基于上次跑通结果的经验阈值，无需重跑 DADA2）
+# 主分析 QC（原始 reads 先检，再过滤 ASV；保留未注释以维持丰度）
 qc:
   enabled: true
-  min_total_reads: 1000
-  min_observed_asv: 20
-  max_observed_asv: 500
-  max_shannon: 6.0
-  asv_min_prevalence: 0.10
-  remove_unassigned_taxonomy: true
+  min_raw_reads: 3000
+  min_assigned_reads: 200
+  min_observed_asv: 10
+  max_observed_asv: 800
+  max_shannon: 6.5
+  asv_min_prevalence: 0.05
+  remove_unassigned_taxonomy: false
+
+# 敏感性分析：与主分析并行的放宽 QC 队列
+sensitivity:
+  enabled: true
+  relaxed_qc:
+    min_raw_reads: 1000
+    min_assigned_reads: 50
+    min_observed_asv: 5
+    max_observed_asv: 1200
+    max_shannon: 7.0
+    asv_min_prevalence: 0.03
+    remove_unassigned_taxonomy: false
 
 visualization:
   dpi: 300

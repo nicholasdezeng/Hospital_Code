@@ -109,6 +109,12 @@ def run_figure3(clinical: pd.DataFrame, output_dir: Path, permutations: int = 99
 
     perm = permanova(dist, groups, permutations=permutations)
 
+    perm_df = pd.DataFrame([{
+        "F": perm["F"], "R2": perm["R2"], "p": perm["p"],
+        "permutations": permutations, "n_samples": len(sample_ids),
+    }])
+    perm_df.to_csv(output_dir / "figure3_permanova.csv", index=False, encoding="utf-8-sig")
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     palette = {"Early": PALETTE["early"], "Delayed": PALETTE["delayed"]}

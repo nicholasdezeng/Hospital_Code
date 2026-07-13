@@ -90,59 +90,74 @@ def filter_microbiome_qc(
     taxonomy: pd.DataFrame,
     cfg: dict,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """菌群 QC：样本过滤 + ASV 流行度过滤 + 未注释 ASV 过滤。"""
+    """菌群 QC：先用原始 reads 筛样本，再过滤 ASV，最后用多样性指标复核。"""
     qc = cfg.get("qc", {})
     logs = []
-    asv = asv.copy()
+    asv_raw = asv.copy()
     taxonomy = taxonomy.copy()
 
-    # 1) 过滤未注释 ASV
-    if qc.get("remove_unassigned_taxonomy", True):
+    # 0) 原始 reads 阈值（在移除 Unknown ASV 之前，避免误杀低注释样本）
+    min_raw_reads = qc.get("min_raw_reads", qc.get("min_total_reads", 1000))
+    raw_totals = asv_raw.sum(axis=1)
+    raw_keep = raw_totals[raw_totals >= min_raw_reads].index.tolist()
+    for sid in asv_raw.index:
+        if sid not in raw_keep:
+            logs.append({
+                "sample_id": sid,
+                "stage": "microbiome_qc",
+                "reason": f"原始总 reads {raw_totals[sid]:.0f} < {min_raw_reads}",
+            })
+    asv = asv_raw.loc[raw_keep].copy()
+    if asv.empty:
+        return asv, taxonomy, pd.DataFrame(logs)
+
+    # 1) 过滤未注释 ASV（可选）
+    if qc.get("remove_unassigned_taxonomy", False):
         phylum_col = "Phylum" if "Phylum" in taxonomy.columns else None
         if phylum_col:
             assigned = taxonomy[phylum_col].fillna("Unknown").astype(str).str.lower() != "unknown"
             n_before = asv.shape[1]
             asv = asv.loc[:, asv.columns.isin(taxonomy.index[assigned])]
             if n_before > asv.shape[1]:
-                logs.append(
-                    {
-                        "sample_id": "_global_",
-                        "stage": "asv_filter",
-                        "reason": f"移除未注释 ASV: {n_before - asv.shape[1]} 个",
-                    }
-                )
+                logs.append({
+                    "sample_id": "_global_",
+                    "stage": "asv_filter",
+                    "reason": f"移除未注释 ASV: {n_before - asv.shape[1]} 个",
+                })
 
     # 2) ASV 流行度过滤
-    min_prev = qc.get("asv_min_prevalence", 0.10)
-    if min_prev > 0 and asv.shape[0] > 0:
+    min_prev = qc.get("asv_min_prevalence", 0.05)
+    if min_prev > 0 and asv.shape[0] > 0 and asv.shape[1] > 0:
         prevalence = (asv > 0).sum(axis=0) / asv.shape[0]
         keep_asvs = prevalence >= min_prev
         n_before = asv.shape[1]
         asv = asv.loc[:, keep_asvs]
         if n_before > asv.shape[1]:
-            logs.append(
-                {
-                    "sample_id": "_global_",
-                    "stage": "asv_filter",
-                    "reason": f"移除低流行度 ASV (<{min_prev:.0%}): {n_before - asv.shape[1]} 个",
-                }
-            )
+            logs.append({
+                "sample_id": "_global_",
+                "stage": "asv_filter",
+                "reason": f"移除低流行度 ASV (<{min_prev:.0%}): {n_before - asv.shape[1]} 个",
+            })
 
-    # 3) 样本级 QC
-    min_reads = qc.get("min_total_reads", 1000)
-    min_obs = qc.get("min_observed_asv", 20)
-    max_obs = qc.get("max_observed_asv", 500)
-    max_shannon = qc.get("max_shannon", 6.0)
+    # 3) 过滤后 assigned reads + 多样性指标
+    min_assigned_reads = qc.get("min_assigned_reads", 200)
+    min_obs = qc.get("min_observed_asv", 10)
+    max_obs = qc.get("max_observed_asv", 800)
+    max_shannon = qc.get("max_shannon", 6.5)
 
-    alpha = alpha_diversity_table(asv)
+    alpha = alpha_diversity_table(asv) if asv.shape[1] > 0 else pd.DataFrame()
     keep_samples = []
     for sid in asv.index:
-        total_reads = float(asv.loc[sid].sum())
+        assigned_reads = float(asv.loc[sid].sum())
         obs = int(alpha.loc[sid, "observed_asv"]) if sid in alpha.index else 0
         sh = float(alpha.loc[sid, "shannon"]) if sid in alpha.index else 0.0
 
-        if total_reads < min_reads:
-            logs.append({"sample_id": sid, "stage": "microbiome_qc", "reason": f"总 reads {total_reads:.0f} < {min_reads}"})
+        if assigned_reads < min_assigned_reads:
+            logs.append({
+                "sample_id": sid,
+                "stage": "microbiome_qc",
+                "reason": f"过滤后 reads {assigned_reads:.0f} < {min_assigned_reads}",
+            })
             continue
         if obs < min_obs:
             logs.append({"sample_id": sid, "stage": "microbiome_qc", "reason": f"observed_asv {obs} < {min_obs}"})
@@ -156,8 +171,7 @@ def filter_microbiome_qc(
         keep_samples.append(sid)
 
     asv = asv.loc[keep_samples]
-    log_df = pd.DataFrame(logs)
-    return asv, taxonomy, log_df
+    return asv, taxonomy, pd.DataFrame(logs)
 
 
 def save_exclusion_log(logs: list[pd.DataFrame], output_dir: Path) -> pd.DataFrame:

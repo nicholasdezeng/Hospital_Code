@@ -23,27 +23,38 @@ analysis:
   random_seed: 42
   permutations: 999
   bootstrap_n: 1000
+  permutation_n: 500
   lda_threshold: 2.0
   fdr_alpha: 0.05
-  use_demo_microbiome: true  # 无真实 ASV 数据时自动生成演示数据
+  use_demo_microbiome: true
 
-# 纳入排除（演示环境放宽，正式分析见 config.server.yaml）
 inclusion:
   enabled: true
   require_extubation_time: true
-  require_core_clinical: false   # 演示数据部分字段缺失
+  require_core_clinical: false
   exclude_history: false
   max_clinical_missing_frac: 0.50
 
-# 菌群 QC（演示环境关闭；服务器正式跑时开启）
 qc:
   enabled: false
-  min_total_reads: 1000
-  min_observed_asv: 20
-  max_observed_asv: 500
-  max_shannon: 6.0
-  asv_min_prevalence: 0.10
-  remove_unassigned_taxonomy: true
+  min_raw_reads: 3000
+  min_assigned_reads: 200
+  min_observed_asv: 10
+  max_observed_asv: 800
+  max_shannon: 6.5
+  asv_min_prevalence: 0.05
+  remove_unassigned_taxonomy: false
+
+sensitivity:
+  enabled: true
+  relaxed_qc:
+    min_raw_reads: 1000
+    min_assigned_reads: 50
+    min_observed_asv: 5
+    max_observed_asv: 1200
+    max_shannon: 7.0
+    asv_min_prevalence: 0.03
+    remove_unassigned_taxonomy: false
 
 visualization:
   dpi: 300

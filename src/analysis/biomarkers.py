@@ -103,14 +103,26 @@ def run_figure9(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
-    # 9A method overlap bar
+    # 9A: 多方法交叉矩阵（区别于 Figure 4 的 LEfSe 条形图）
+    method_cols = ["LEfSe", "RandomForest", "Spearman", "L1-Logistic"]
     top = consensus.head(12)
-    axes[0].barh(top["genus"], top["method_count"], color=PALETTE["microbiome"])
-    axes[0].set_xlabel("Number of methods")
-    axes[0].set_title("A. Cross-method consensus genera")
-    axes[0].invert_yaxis()
+    if not top.empty:
+        matrix = top.set_index("genus")[method_cols].astype(int)
+        sns.heatmap(
+            matrix,
+            cmap=["#F5F5F5", PALETTE["microbiome"]],
+            cbar=False,
+            linewidths=0.5,
+            linecolor="white",
+            ax=axes[0],
+        )
+        axes[0].set_xlabel("Analysis method")
+        axes[0].set_ylabel("")
+        axes[0].set_title("A. Cross-method identification matrix")
+    else:
+        axes[0].text(0.5, 0.5, "No consensus genera", ha="center")
 
-    # 9B heatmap
+    # 9B: 共识菌属-预后关联热图（保留，与 Figure 5 的多样性-炎症矩阵区分）
     if key_genera:
         pivot = corr_out.pivot(index="genus", columns="outcome", values="rho").loc[key_genera]
         sns.heatmap(pivot, annot=True, fmt=".2f", cmap="RdBu_r", center=0, ax=axes[1])
@@ -118,26 +130,31 @@ def run_figure9(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     else:
         axes[1].text(0.5, 0.5, "No key genera", ha="center")
 
-    # 9C high/low abundance comparison for top 2 genera
+    # 9C: 关键菌属高/低丰度 — 拔管时间 + AE 率标注
     plot_genera = key_genera[:2] if len(key_genera) >= 2 else key_genera
-    rows = []
-    for g in plot_genera:
-        median = rel_genus[g].median()
-        grp = np.where(rel_genus[g] >= median, "High", "Low")
-        tmp = pd.DataFrame(
-            {
-                "Genus": g,
-                "AbundanceGroup": grp,
-                "ExtubationTime": clinical["extubation_time_min"].values,
-                "QoR15": clinical["qor15"].values,
-            },
-            index=clinical.index,
-        )
-        rows.append(tmp)
-    if rows:
-        long_df = pd.concat(rows, ignore_index=True)
-        sns.boxplot(data=long_df.dropna(subset=["ExtubationTime"]), x="Genus", y="ExtubationTime", hue="AbundanceGroup", ax=axes[2])
-        axes[2].set_title("C. High vs low abundance groups")
+    if plot_genera:
+        plot_rows = []
+        for g in plot_genera:
+            high_mask = rel_genus[g] >= rel_genus[g].median()
+            for sid in clinical.index:
+                plot_rows.append({
+                    "Genus": g,
+                    "Group": "High" if high_mask.loc[sid] else "Low",
+                    "ExtubationTime": clinical.loc[sid, "extubation_time_min"],
+                    "AE": clinical.loc[sid, "adverse_event"],
+                })
+        plot_df = pd.DataFrame(plot_rows).dropna(subset=["ExtubationTime"])
+        sns.boxplot(data=plot_df, x="Genus", y="ExtubationTime", hue="Group", ax=axes[2])
+        ymax = plot_df["ExtubationTime"].max()
+        for i, g in enumerate(plot_genera):
+            for j, ab in enumerate(["Low", "High"]):
+                sub = plot_df[(plot_df["Genus"] == g) & (plot_df["Group"] == ab)]
+                if len(sub):
+                    axes[2].text(
+                        i + (-0.18 if ab == "Low" else 0.18), ymax * 1.02,
+                        f"AE {sub['AE'].mean():.0%}", ha="center", fontsize=7,
+                    )
+        axes[2].set_title("C. High vs low genus abundance — extubation time")
     else:
         axes[2].text(0.5, 0.5, "No comparison data", ha="center")
 

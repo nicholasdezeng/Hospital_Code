@@ -100,6 +100,26 @@ def bootstrap_auc_ci(y_true, y_score, n_boot: int = 1000, ci: float = 0.95, seed
     return float(point), float(low), float(high)
 
 
+def permutation_auc_pvalue(y_true, y_score, n_perm: int = 500, seed: int = 42) -> float:
+    """标签置换检验：评估 AUC 是否优于随机。"""
+    from sklearn.metrics import roc_auc_score
+
+    y_true = np.asarray(y_true)
+    y_score = np.asarray(y_score)
+    if len(np.unique(y_true)) < 2:
+        return np.nan
+    obs = roc_auc_score(y_true, y_score)
+    rng = np.random.default_rng(seed)
+    ge = 0
+    for _ in range(n_perm):
+        y_perm = rng.permutation(y_true)
+        if len(np.unique(y_perm)) < 2:
+            continue
+        if roc_auc_score(y_perm, y_score) >= obs:
+            ge += 1
+    return float((ge + 1) / (n_perm + 1))
+
+
 def delong_auc_test(y_true, y_score_a, y_score_b, n_boot: int = 500, seed: int = 42):
     """Bootstrap ΔAUC 近似检验。"""
     from sklearn.metrics import roc_auc_score
