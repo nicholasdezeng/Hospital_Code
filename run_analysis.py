@@ -7,6 +7,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import yaml
@@ -34,10 +35,63 @@ from src.preprocessing import (
     save_exclusion_log,
 )
 
+FIGURE_CATALOG = {
+    1: ("Figure 1 — 菌群全景", "figure1_microbiome_overview.png"),
+    2: ("Figure 2 — α 多样性", "figure2_alpha_diversity.png"),
+    3: ("Figure 3 — β 多样性", "figure3_beta_diversity.png"),
+    4: ("Figure 4 — 差异菌群", "figure4_differential_microbiota.png"),
+    5: ("Figure 5 — 多样性-炎症相关", "figure5_inflammation_correlation.png"),
+    6: ("Figure 6 — 四象限分层", "figure6_quadrant_analysis.png"),
+    7: ("Figure 7 — 中介分析", "figure7_mediation.png"),
+    8: ("Figure 8 — 预测模型 ROC", "figure8_prediction_roc.png"),
+    9: ("Figure 9 — 关键预后菌群", "figure9_key_biomarkers.png"),
+}
+
+TABLE_CATALOG = {
+    "table1": "Table 1 — 基线特征",
+    "table2": "Table 2 — 模型性能（随 Figure 8 生成）",
+    "table3": "Table 3 — 多因素 Logistic",
+    "sensitivity": "敏感性分析",
+}
+
 
 def load_config(config_path: Path) -> dict:
     with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def parse_selection(spec: str | None, *, valid: range | set | None = None) -> set:
+    """解析 'all' / '1' / '1,3,8' / '2-5' 形式的选择。"""
+    if spec is None or str(spec).strip().lower() in ("all", "*", ""):
+        if isinstance(valid, range):
+            return set(valid)
+        if valid is not None:
+            return set(valid)
+        return set()
+
+    selected: set = set()
+    for part in str(spec).split(","):
+        part = part.strip().lower()
+        if not part:
+            continue
+        if part in ("all", "*"):
+            if isinstance(valid, range):
+                selected.update(valid)
+            elif valid is not None:
+                selected.update(valid)
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            selected.update(range(int(start), int(end) + 1))
+        else:
+            token = part.replace("figure", "").replace("fig", "")
+            selected.add(int(token) if token.isdigit() else part)
+    if valid is not None:
+        allowed = set(valid) if not isinstance(valid, range) else set(valid)
+        unknown = selected - allowed
+        if unknown:
+            raise ValueError(f"未知选项: {sorted(unknown)}；可选: {sorted(allowed)}")
+    return selected
 
 
 def _load_microbiome(cfg: dict, root: Path, clinical: pd.DataFrame):
@@ -50,7 +104,7 @@ def _load_microbiome(cfg: dict, root: Path, clinical: pd.DataFrame):
     use_demo = cfg["analysis"]["use_demo_microbiome"]
 
     if asv_path.exists() and tax_path.exists():
-        print(f"[2/11] 加载真实菌群数据")
+        print("[数据] 加载真实菌群数据")
         asv = load_asv_table(asv_path)
         taxonomy = load_taxonomy(tax_path)
         print(f"      ASV 表: {asv.shape[0]} 样本 × {asv.shape[1]} ASV")
@@ -61,7 +115,7 @@ def _load_microbiome(cfg: dict, root: Path, clinical: pd.DataFrame):
             print(f"      QC 后: {asv.shape[0]} 样本 × {asv.shape[1]} ASV（排除 {n_qc_excl} 例）")
         return asv, taxonomy, qc_log, False
     if use_demo:
-        print(f"[2/11] 未找到 ASV 数据，生成演示用菌群数据")
+        print("[数据] 未找到 ASV 数据，生成演示用菌群数据")
         asv, taxonomy = generate_demo_microbiome(clinical, seed=cfg["analysis"]["random_seed"])
         demo_dir = root / "data" / "microbiome"
         demo_dir.mkdir(parents=True, exist_ok=True)
@@ -71,18 +125,42 @@ def _load_microbiome(cfg: dict, root: Path, clinical: pd.DataFrame):
     raise FileNotFoundError("缺少菌群数据，请将 ASV 表放入 data/microbiome/ 或开启 use_demo_microbiome")
 
 
-def main(config_path: str = "config.yaml"):
-    cfg = load_config(Path(config_path))
-    root = Path(__file__).resolve().parent
-    out_root = root / cfg["project"]["output_dir"]
-    fig_dir = out_root / "figures"
-    tab_dir = out_root / "tables"
-    sens_dir = out_root / "sensitivity"
-    fig_dir.mkdir(parents=True, exist_ok=True)
-    tab_dir.mkdir(parents=True, exist_ok=True)
+def _resolve_dependencies(selected_figures: set[int]) -> list[int]:
+    """按依赖顺序返回要运行的图编号（含自动补跑的依赖图）。"""
+    deps = {8: [3], 9: [4]}
+    ordered = sorted(selected_figures)
+    resolved: list[int] = []
+    for fig_id in ordered:
+        for dep in deps.get(fig_id, []):
+            if dep not in resolved:
+                resolved.append(dep)
+        if fig_id not in resolved:
+            resolved.append(fig_id)
+    return resolved
 
-    clinical_path = (root / cfg["paths"]["clinical_data"]).resolve()
-    print(f"[1/11] 加载临床数据: {clinical_path}")
+
+def _print_catalog():
+    print("\n可选图表 (--figures):")
+    for num, (label, filename) in FIGURE_CATALOG.items():
+        print(f"  {num:>2}  {label:<28}  →  output/figures/{filename}")
+    print("\n可选表格/模块 (--tables):")
+    for key, label in TABLE_CATALOG.items():
+        print(f"  {key:<12} {label}")
+    print("\n示例:")
+    print("  python run_analysis.py --config config.server.yaml --figures 1")
+    print("  python run_analysis.py --config config.server.yaml --figures 1,3,8")
+    print("  python run_analysis.py --config config.server.yaml --figures 2-4 --tables table1")
+    print("  python run_analysis.py --config config.server.yaml   # 默认跑全部\n")
+
+
+def _prepare_clinical(cfg: dict, root: Path):
+    """加载并合并临床 + 菌群数据，返回分析用 DataFrame。"""
+    clinical_path = Path(cfg["paths"]["clinical_data"])
+    if not clinical_path.is_absolute():
+        clinical_path = root / clinical_path
+    clinical_path = clinical_path.resolve()
+
+    print(f"[数据] 加载临床数据: {clinical_path}")
     clinical_raw = load_clinical_excel(clinical_path)
     print(f"      原始样本: {len(clinical_raw)} 例")
 
@@ -107,7 +185,6 @@ def main(config_path: str = "config.yaml"):
     if not qc_log.empty:
         exclusion_logs.append(qc_log)
 
-    # 保存原始 ASV 副本供敏感性分析
     asv_for_sensitivity = load_asv_table(asv_path) if asv_path.exists() else asv.copy()
     tax_for_sensitivity = load_taxonomy(tax_path) if tax_path.exists() else taxonomy.copy()
 
@@ -121,42 +198,116 @@ def main(config_path: str = "config.yaml"):
         exclusion_logs.append(merge_log)
     print(f"      最终纳入分析: {len(clinical)} 例")
 
-    exclusion_df = save_exclusion_log(exclusion_logs, out_root)
+    exclusion_df = save_exclusion_log(exclusion_logs, root / cfg["project"]["output_dir"])
+    return clinical, clinical_raw, exclusion_df, asv_for_sensitivity, tax_for_sensitivity, use_demo
 
-    print("[3/11] Table 1 — 基线特征")
-    run_baseline(clinical, tab_dir)
 
-    print("[4/11] Figure 1 — 菌群全景")
-    run_figure1(clinical, fig_dir)
+def _run_figure(fig_id: int, clinical: pd.DataFrame, fig_dir: Path, cfg: dict) -> str:
+    runners: dict[int, Callable] = {
+        1: lambda: run_figure1(clinical, fig_dir),
+        2: lambda: run_figure2(clinical, fig_dir),
+        3: lambda: run_figure3(clinical, fig_dir, permutations=cfg["analysis"]["permutations"]),
+        4: lambda: run_figure4(clinical, fig_dir, lda_threshold=cfg["analysis"]["lda_threshold"]),
+        5: lambda: run_figure5(clinical, fig_dir, fdr_alpha=cfg["analysis"]["fdr_alpha"]),
+        6: lambda: run_figure6(clinical, fig_dir, crp_threshold=cfg["grouping"]["crp_threshold"]),
+        7: lambda: run_figure7(clinical, fig_dir, n_boot=cfg["analysis"]["bootstrap_n"]),
+        8: lambda: run_prediction(
+            clinical,
+            fig_dir,
+            n_boot=cfg["analysis"]["bootstrap_n"],
+            n_perm=cfg["analysis"].get("permutation_n", 500),
+        ),
+        9: lambda: run_figure9(clinical, fig_dir),
+    }
+    label, filename = FIGURE_CATALOG[fig_id]
+    print(f"\n▶ {label}")
+    runners[fig_id]()
+    out_path = fig_dir / filename
+    print(f"  ✓ 已保存: {out_path}")
+    return str(out_path)
 
-    print("[5/11] Figure 2-3 — α/β 多样性")
-    run_figure2(clinical, fig_dir)
-    run_figure3(clinical, fig_dir, permutations=cfg["analysis"]["permutations"])
 
-    print("[6/11] Figure 4 — 差异菌群")
-    run_figure4(clinical, fig_dir, lda_threshold=cfg["analysis"]["lda_threshold"])
+def main(
+    config_path: str = "config.yaml",
+    *,
+    figures: str | None = None,
+    tables: str | None = None,
+    list_catalog: bool = False,
+):
+    if list_catalog:
+        _print_catalog()
+        return
 
-    print("[7/11] Figure 5-7 — 菌群-炎症轴 & 中介分析")
-    run_figure5(clinical, fig_dir, fdr_alpha=cfg["analysis"]["fdr_alpha"])
-    run_figure6(clinical, fig_dir, crp_threshold=cfg["grouping"]["crp_threshold"])
-    run_figure7(clinical, fig_dir, n_boot=cfg["analysis"]["bootstrap_n"])
+    cfg = load_config(Path(config_path))
+    root = Path(__file__).resolve().parent
+    out_root = root / cfg["project"]["output_dir"]
+    fig_dir = out_root / "figures"
+    tab_dir = out_root / "tables"
+    sens_dir = out_root / "sensitivity"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    tab_dir.mkdir(parents=True, exist_ok=True)
 
-    print("[8/11] Figure 8 & Table 2 — 预测模型 + MLP 验证")
-    run_prediction(
-        clinical,
-        fig_dir,
-        n_boot=cfg["analysis"]["bootstrap_n"],
-        n_perm=cfg["analysis"].get("permutation_n", 500),
-    )
+    run_all = figures is None and tables is None
+    if run_all:
+        selected_figures = set(range(1, 10))
+        selected_tables = {"table1", "table2", "table3", "sensitivity"}
+    else:
+        selected_figures = parse_selection(figures, valid=range(1, 10)) if figures is not None else set()
+        selected_tables = (
+            parse_selection(tables, valid={"table1", "table2", "table3", "sensitivity"})
+            if tables is not None
+            else set()
+        )
 
-    print("[9/11] Figure 9 — 关键预后菌群")
-    run_figure9(clinical, fig_dir)
+    if not selected_figures and not selected_tables:
+        print("未选择任何输出。使用 --list 查看选项，或 --figures 1 指定单张图。")
+        _print_catalog()
+        return
 
-    print("[10/11] Table 3 — 多因素 Logistic 回归")
-    run_multivariable(clinical, tab_dir)
+    clinical, clinical_raw, exclusion_df, asv_for_sensitivity, tax_for_sensitivity, use_demo = _prepare_clinical(cfg, root)
 
-    print("[11/11] 敏感性分析 — 严格 vs 放宽 QC")
-    run_sensitivity_cohorts(clinical_raw, asv_for_sensitivity, tax_for_sensitivity, cfg, sens_dir)
+    modules_completed: list[str] = []
+    generated_files: list[str] = []
+
+    if "table1" in selected_tables:
+        print("\n▶ Table 1 — 基线特征")
+        run_baseline(clinical, tab_dir)
+        modules_completed.append("table1_baseline")
+        generated_files.append(str(tab_dir / "table1_baseline.csv"))
+
+    figure_run_list = _resolve_dependencies(selected_figures)
+    auto_deps = set(figure_run_list) - selected_figures
+    if auto_deps:
+        print(f"[依赖] 自动补跑: Figure {', '.join(str(x) for x in sorted(auto_deps))}")
+
+    for fig_id in figure_run_list:
+        generated_files.append(_run_figure(fig_id, clinical, fig_dir, cfg))
+        modules_completed.append(f"figure{fig_id}")
+        if fig_id == 8:
+            modules_completed.extend(["table2_model_performance", "mlp_validation", "permutation_test"])
+
+    if "table2" in selected_tables and 8 not in selected_figures and 8 not in figure_run_list:
+        print("\n▶ Table 2 — 模型性能（需 Figure 8 逻辑）")
+        run_prediction(
+            clinical,
+            fig_dir,
+            n_boot=cfg["analysis"]["bootstrap_n"],
+            n_perm=cfg["analysis"].get("permutation_n", 500),
+        )
+        modules_completed.append("table2_model_performance")
+        generated_files.append(str(fig_dir / "table2_model_performance.csv"))
+
+    if "table3" in selected_tables:
+        print("\n▶ Table 3 — 多因素 Logistic 回归")
+        run_multivariable(clinical, tab_dir)
+        modules_completed.append("table3_multivariable_or")
+        generated_files.append(str(tab_dir / "table3_multivariable_or.csv"))
+
+    if "sensitivity" in selected_tables:
+        print("\n▶ 敏感性分析 — 严格 vs 放宽 QC")
+        run_sensitivity_cohorts(clinical_raw, asv_for_sensitivity, tax_for_sensitivity, cfg, sens_dir)
+        modules_completed.append("sensitivity_cohort_summary")
+        generated_files.append(str(sens_dir / "sensitivity_cohort_summary.csv"))
 
     n_qc_excl = int((exclusion_df["stage"] == "microbiome_qc").sum()) if not exclusion_df.empty else 0
     n_clinical_excl = len(clinical_raw) - len(apply_inclusion_exclusion(clinical_raw, cfg)[0])
@@ -171,25 +322,54 @@ def main(config_path: str = "config.yaml"):
         "n_delayed": int((clinical["extubation_group"] == "Delayed").sum()),
         "demo_microbiome": use_demo,
         "output_dir": str(out_root),
-        "modules_completed": [
-            "table1_baseline", "figure1-9", "table2_model_performance",
-            "table3_multivariable_or", "sensitivity_cohort_summary",
-            "exclusion_log", "mlp_validation", "permutation_test",
-        ],
+        "figures_requested": sorted(selected_figures),
+        "figures_run": figure_run_list,
+        "tables_requested": sorted(selected_tables),
+        "modules_completed": modules_completed,
+        "generated_files": generated_files,
     }
     with open(out_root / "run_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
     clinical.reset_index().to_csv(out_root / "processed_clinical_data.csv", index=False, encoding="utf-8-sig")
-    print("\n✅ 完整分析流程已完成！")
-    print(f"   图表: {fig_dir}")
-    print(f"   表格: {tab_dir}")
-    print(f"   敏感性: {sens_dir}")
+
+    print("\n✅ 完成！")
+    if selected_figures:
+        print(f"   本次图表: Figure {', '.join(str(x) for x in sorted(selected_figures))}")
+    if generated_files:
+        print("   输出文件:")
+        for path in generated_files:
+            print(f"     - {path}")
     print(f"   摘要: {out_root / 'run_summary.json'}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AICU 呼吸道菌群预后研究分析流水线")
+    parser = argparse.ArgumentParser(
+        description="AICU 呼吸道菌群预后研究分析流水线（支持按图选择性输出）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  python run_analysis.py --config config.server.yaml --figures 1
+  python run_analysis.py --config config.server.yaml --figures 1,3,8
+  python run_analysis.py --config config.server.yaml --figures 2-4
+  python run_analysis.py --list
+        """,
+    )
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
+    parser.add_argument(
+        "--figures", "-f",
+        metavar="SPEC",
+        help="要生成的图: 1 / 1,3,8 / 2-5 / all（默认 all）",
+    )
+    parser.add_argument(
+        "--tables", "-t",
+        metavar="SPEC",
+        help="要生成的表格: table1,table2,table3,sensitivity / all",
+    )
+    parser.add_argument("--list", action="store_true", help="列出所有可选图表与用法")
     args = parser.parse_args()
-    main(args.config)
+
+    if args.list:
+        _print_catalog()
+    else:
+        main(args.config, figures=args.figures, tables=args.tables)
