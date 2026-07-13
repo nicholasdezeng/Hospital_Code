@@ -34,6 +34,7 @@ from src.preprocessing import (
     merge_microbiome,
     save_exclusion_log,
 )
+from src.report.export_workbook import export_results_workbook
 
 FIGURE_CATALOG = {
     1: ("Figure 1 — 菌群全景", "figure1_microbiome_overview.png"),
@@ -202,7 +203,7 @@ def _prepare_clinical(cfg: dict, root: Path):
     return clinical, clinical_raw, exclusion_df, asv_for_sensitivity, tax_for_sensitivity, use_demo
 
 
-def _run_figure(fig_id: int, clinical: pd.DataFrame, fig_dir: Path, cfg: dict) -> str:
+def _run_figure(fig_id: int, clinical: pd.DataFrame, fig_dir: Path, cfg: dict, tab_dir: Path) -> str:
     runners: dict[int, Callable] = {
         1: lambda: run_figure1(clinical, fig_dir),
         2: lambda: run_figure2(clinical, fig_dir),
@@ -216,6 +217,7 @@ def _run_figure(fig_id: int, clinical: pd.DataFrame, fig_dir: Path, cfg: dict) -
             fig_dir,
             n_boot=cfg["analysis"]["bootstrap_n"],
             n_perm=cfg["analysis"].get("permutation_n", 500),
+            tables_dir=tab_dir,
         ),
         9: lambda: run_figure9(clinical, fig_dir),
     }
@@ -239,6 +241,7 @@ def main(
         return
 
     cfg = load_config(Path(config_path))
+    cfg["_config_path"] = str(Path(config_path).resolve())
     root = Path(__file__).resolve().parent
     out_root = root / cfg["project"]["output_dir"]
     fig_dir = out_root / "figures"
@@ -281,7 +284,7 @@ def main(
         print(f"[依赖] 自动补跑: Figure {', '.join(str(x) for x in sorted(auto_deps))}")
 
     for fig_id in figure_run_list:
-        generated_files.append(_run_figure(fig_id, clinical, fig_dir, cfg))
+        generated_files.append(_run_figure(fig_id, clinical, fig_dir, cfg, tab_dir))
         modules_completed.append(f"figure{fig_id}")
         if fig_id == 8:
             modules_completed.extend(["table2_model_performance", "mlp_validation", "permutation_test"])
@@ -293,6 +296,7 @@ def main(
             fig_dir,
             n_boot=cfg["analysis"]["bootstrap_n"],
             n_perm=cfg["analysis"].get("permutation_n", 500),
+            tables_dir=tab_dir,
         )
         modules_completed.append("table2_model_performance")
         generated_files.append(str(fig_dir / "table2_model_performance.csv"))
@@ -333,6 +337,18 @@ def main(
 
     clinical.reset_index().to_csv(out_root / "processed_clinical_data.csv", index=False, encoding="utf-8-sig")
 
+    print("\n▶ 汇总 Excel — 分析结果工作簿")
+    workbook_path = export_results_workbook(
+        out_root, cfg, summary, clinical=clinical, exclusion_df=exclusion_df
+    )
+    generated_files.append(str(workbook_path))
+    modules_completed.append("export_workbook")
+    summary["modules_completed"] = modules_completed
+    summary["generated_files"] = generated_files
+    with open(out_root / "run_summary.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    print(f"  ✓ 已保存: {workbook_path}")
+
     print("\n✅ 完成！")
     if selected_figures:
         print(f"   本次图表: Figure {', '.join(str(x) for x in sorted(selected_figures))}")
@@ -341,6 +357,7 @@ def main(
         for path in generated_files:
             print(f"     - {path}")
     print(f"   摘要: {out_root / 'run_summary.json'}")
+    print(f"   Excel汇总: {out_root / 'AICU_分析结果汇总.xlsx'}")
 
 
 if __name__ == "__main__":

@@ -91,6 +91,7 @@ def run_prediction(
     seed: int = 42,
     n_boot: int = 1000,
     n_perm: int = 500,
+    tables_dir: Path | None = None,
 ) -> pd.DataFrame:
     apply_style()
     clinical, micro_cols = _build_microbiome_features(clinical)
@@ -259,4 +260,8 @@ def run_prediction(
     metrics_df = pd.DataFrame(all_metrics)
     metrics_df.to_csv(output_dir / "table2_model_performance.csv", index=False, encoding="utf-8-sig")
     metrics_df.to_excel(output_dir / "table2_model_performance.xlsx", index=False)
+    if tables_dir is not None:
+        tables_dir.mkdir(parents=True, exist_ok=True)
+        metrics_df.to_csv(tables_dir / "table2_model_performance.csv", index=False, encoding="utf-8-sig")
+        metrics_df.to_excel(tables_dir / "table2_model_performance.xlsx", index=False)
     return metrics_df
