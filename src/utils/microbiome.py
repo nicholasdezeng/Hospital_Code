@@ -75,6 +75,55 @@ def rarefaction_curve(counts: np.ndarray, steps: int = 20) -> tuple[np.ndarray, 
     return depths, np.array(observed)
 
 
+PHYLUM_DISPLAY_NAMES = {
+    "Bacillota": "Firmicutes",
+    "Firmicutes": "Firmicutes",
+    "Pseudomonadota": "Proteobacteria",
+    "Proteobacteria": "Proteobacteria",
+    "Bacteroidota": "Bacteroidetes",
+    "Bacteroidetes": "Bacteroidetes",
+    "Actinomycetota": "Actinobacteria",
+    "Actinobacteria": "Actinobacteria",
+    "Fusobacteriota": "Fusobacteria",
+    "Fusobacteria": "Fusobacteria",
+    "Unknown": "Unassigned",
+    "Unassigned": "Unassigned",
+}
+
+PHYLUM_STACK_ORDER = [
+    "Firmicutes",
+    "Proteobacteria",
+    "Bacteroidetes",
+    "Actinobacteria",
+    "Fusobacteria",
+    "Other",
+]
+
+
+def normalize_phylum_name(name: str) -> str:
+    text = str(name).strip()
+    for prefix in ("k__", "p__"):
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+    text = text.replace("_", " ")
+    return PHYLUM_DISPLAY_NAMES.get(text, text)
+
+
+def collapse_phyla_for_plot(rel_phylum: pd.DataFrame) -> pd.DataFrame:
+    """合并同类门名，固定 SCI 图例顺序（含 Other）。"""
+    rel = rel_phylum.copy()
+    rel.columns = [normalize_phylum_name(c) for c in rel.columns]
+    rel = rel.T.groupby(level=0).sum().T
+
+    out = pd.DataFrame(index=rel.index)
+    for phylum in PHYLUM_STACK_ORDER[:-1]:
+        out[phylum] = rel[phylum] if phylum in rel.columns else 0.0
+    other_cols = [c for c in rel.columns if c not in PHYLUM_STACK_ORDER[:-1]]
+    out["Other"] = rel[other_cols].sum(axis=1) if other_cols else (1.0 - out.sum(axis=1)).clip(lower=0)
+    row_sum = out.sum(axis=1).replace(0, np.nan)
+    return out.div(row_sum, axis=0).fillna(0)
+
+
 def aggregate_taxonomy(asv: pd.DataFrame, taxonomy: pd.DataFrame, level: str) -> pd.DataFrame:
     if level not in taxonomy.columns:
         raise ValueError(f"Taxonomy level {level} not found")
