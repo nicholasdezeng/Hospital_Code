@@ -5,19 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from scipy import stats
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LassoCV, LogisticRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.utils.microbiome import aggregate_taxonomy, relative_abundance
-from src.utils.stats import compare_continuous, fdr_correct, format_p, spearman_with_fdr
-from src.visualization.style import PALETTE, apply_style, save_figure
+from src.utils.stats import fdr_correct
+from src.visualization.style import PALETTE, apply_style, finalize_figure, format_taxon, heatmap_cbar_kw, save_figure
 
 
 def _consensus_genera(clinical: pd.DataFrame, rel_genus: pd.DataFrame) -> pd.DataFrame:
@@ -88,6 +89,12 @@ def run_figure9(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
         key_genera = consensus.head(4)["genus"].tolist()
 
     outcome_cols = ["extubation_time_min", "icu_stay_min", "adverse_event", "qor15"]
+    outcome_labels = {
+        "extubation_time_min": "Extubation",
+        "icu_stay_min": "ICU stay",
+        "adverse_event": "Adverse event",
+        "qor15": "QoR-15",
+    }
     corr_records = []
     for g in key_genera:
         for oc in outcome_cols:
@@ -101,13 +108,15 @@ def run_figure9(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     _, q = fdr_correct(corr_out["p"].fillna(1).values)
     corr_out["q"] = q
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    fig = plt.figure(figsize=(18, 6.5))
+    gs = gridspec.GridSpec(1, 3, figure=fig, width_ratios=[1.05, 1.15, 1.1], wspace=0.42)
+    axes = [fig.add_subplot(gs[0, i]) for i in range(3)]
 
-    # 9A: 多方法交叉矩阵（区别于 Figure 4 的 LEfSe 条形图）
     method_cols = ["LEfSe", "RandomForest", "Spearman", "L1-Logistic"]
-    top = consensus.head(12)
+    top = consensus.head(12).copy()
     if not top.empty:
-        matrix = top.set_index("genus")[method_cols].astype(int)
+        top["genus_label"] = top["genus"].map(format_taxon)
+        matrix = top.set_index("genus_label")[method_cols].astype(int)
         sns.heatmap(
             matrix,
             cmap=["#F5F5F5", PALETTE["microbiome"]],
@@ -118,19 +127,34 @@ def run_figure9(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
         )
         axes[0].set_xlabel("Analysis method")
         axes[0].set_ylabel("")
-        axes[0].set_title("A. Cross-method identification matrix")
+        axes[0].set_title("A. Cross-method identification matrix", pad=8)
+        axes[0].tick_params(axis="y", labelsize=8)
+        axes[0].tick_params(axis="x", labelsize=8, rotation=25)
     else:
-        axes[0].text(0.5, 0.5, "No consensus genera", ha="center")
+        axes[0].text(0.5, 0.5, "No consensus genera", ha="center", va="center", transform=axes[0].transAxes)
 
-    # 9B: 共识菌属-预后关联热图（保留，与 Figure 5 的多样性-炎症矩阵区分）
     if key_genera:
         pivot = corr_out.pivot(index="genus", columns="outcome", values="rho").loc[key_genera]
-        sns.heatmap(pivot, annot=True, fmt=".2f", cmap="RdBu_r", center=0, ax=axes[1])
-        axes[1].set_title("B. Genus-outcome correlations")
+        pivot.index = [format_taxon(g) for g in pivot.index]
+        pivot = pivot.rename(columns=outcome_labels)
+        sns.heatmap(
+            pivot,
+            annot=True,
+            fmt=".2f",
+            cmap="RdBu_r",
+            center=0,
+            ax=axes[1],
+            linewidths=0.5,
+            linecolor="white",
+            cbar_kws=heatmap_cbar_kw("Spearman ρ"),
+            annot_kws={"size": 8},
+        )
+        axes[1].set_title("B. Genus-outcome correlations", pad=8)
+        axes[1].tick_params(axis="y", labelsize=8)
+        axes[1].tick_params(axis="x", labelsize=8, rotation=20)
     else:
-        axes[1].text(0.5, 0.5, "No key genera", ha="center")
+        axes[1].text(0.5, 0.5, "No key genera", ha="center", va="center", transform=axes[1].transAxes)
 
-    # 9C: 关键菌属高/低丰度 — 拔管时间 + AE 率标注
     plot_genera = key_genera[:2] if len(key_genera) >= 2 else key_genera
     if plot_genera:
         plot_rows = []
@@ -138,27 +162,58 @@ def run_figure9(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
             high_mask = rel_genus[g] >= rel_genus[g].median()
             for sid in clinical.index:
                 plot_rows.append({
-                    "Genus": g,
+                    "Genus": format_taxon(g),
                     "Group": "High" if high_mask.loc[sid] else "Low",
                     "ExtubationTime": clinical.loc[sid, "extubation_time_min"],
                     "AE": clinical.loc[sid, "adverse_event"],
                 })
         plot_df = pd.DataFrame(plot_rows).dropna(subset=["ExtubationTime"])
-        sns.boxplot(data=plot_df, x="Genus", y="ExtubationTime", hue="Group", ax=axes[2])
+        sns.boxplot(
+            data=plot_df,
+            x="Genus",
+            y="ExtubationTime",
+            hue="Group",
+            palette={"Low": PALETTE["early"], "High": PALETTE["delayed"]},
+            width=0.55,
+            fliersize=0,
+            ax=axes[2],
+        )
+        sns.stripplot(
+            data=plot_df,
+            x="Genus",
+            y="ExtubationTime",
+            hue="Group",
+            dodge=True,
+            palette={"Low": "#333333", "High": "#333333"},
+            alpha=0.45,
+            size=3,
+            ax=axes[2],
+            legend=False,
+        )
         ymax = plot_df["ExtubationTime"].max()
-        for i, g in enumerate(plot_genera):
+        ypad = ymax * 0.06
+        for i, g in enumerate([format_taxon(x) for x in plot_genera]):
             for j, ab in enumerate(["Low", "High"]):
                 sub = plot_df[(plot_df["Genus"] == g) & (plot_df["Group"] == ab)]
                 if len(sub):
                     axes[2].text(
-                        i + (-0.18 if ab == "Low" else 0.18), ymax * 1.02,
-                        f"AE {sub['AE'].mean():.0%}", ha="center", fontsize=7,
+                        i + (-0.22 if ab == "Low" else 0.22),
+                        ymax + ypad,
+                        f"AE {sub['AE'].mean():.0%}",
+                        ha="center",
+                        fontsize=7,
                     )
-        axes[2].set_title("C. High vs low genus abundance — extubation time")
+        axes[2].set_ylim(top=ymax + ypad * 2.5)
+        handles, labels = axes[2].get_legend_handles_labels()
+        if handles:
+            axes[2].legend(handles[:2], labels[:2], title="Abundance", loc="upper right", fontsize=8, frameon=False)
+        axes[2].set_title("C. High vs low genus abundance — extubation time", pad=8)
+        axes[2].set_xlabel("")
+        axes[2].set_ylabel("Extubation time (min)")
     else:
-        axes[2].text(0.5, 0.5, "No comparison data", ha="center")
+        axes[2].text(0.5, 0.5, "No comparison data", ha="center", va="center", transform=axes[2].transAxes)
 
-    fig.suptitle("Figure 9. Identification and characterization of key prognostic microbiota", y=1.02)
+    finalize_figure(fig, "Figure 9. Identification and characterization of key prognostic microbiota", wspace=0.42)
     save_figure(fig, output_dir, "figure9_key_biomarkers")
 
     consensus.to_csv(output_dir / "figure9_consensus_genera.csv", index=False, encoding="utf-8-sig")

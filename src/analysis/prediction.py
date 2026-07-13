@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import shap
@@ -18,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 
 from src.utils.microbiome import aggregate_taxonomy, relative_abundance
 from src.utils.stats import bootstrap_auc_ci, delong_auc_test, format_p, permutation_auc_pvalue
-from src.visualization.style import PALETTE, apply_style, save_figure
+from src.visualization.style import PALETTE, add_stat_box, apply_style, finalize_figure, save_figure, truncate_label
 
 
 CLINICAL_FEATURES = ["age", "sex", "bmi", "asa", "surgery_duration_min", "anesthesia_duration_min", "opioid_morphine_mg"]
@@ -106,7 +107,7 @@ def run_prediction(
     mlp_feats = model_defs["Model C (+Microbiome)"]
 
     all_metrics = []
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(15, 11))
     colors = ["#9DA5B4", "#4C72B0", PALETTE["delayed"]]
     valid_store = {}
 
@@ -160,13 +161,17 @@ def run_prediction(
         )
         ax.plot([0, 1], [0, 1], ":", color="gray", linewidth=1)
         panel = "A" if t_idx == 0 else "B"
-        ax.set_title(f"{panel}. ROC — {target_label}")
-        ax.legend(fontsize=6, loc="lower right")
-        ax.text(
-            0.03, 0.08,
-            f"ΔAUC B-A={delta:.2f}, P={format_p(p_ab)}\nΔAUC C-B={d_bc:.2f}, P={format_p(p_bc)}",
-            transform=ax.transAxes, fontsize=7,
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.85),
+        ax.set_title(f"{panel}. ROC — {target_label}", pad=8)
+        ax.set_xlabel("False positive rate")
+        ax.set_ylabel("True positive rate")
+        ax.legend(fontsize=7, loc="lower right", frameon=True, fancybox=False, edgecolor="#CCCCCC")
+        add_stat_box(
+            ax,
+            f"ΔAUC B−A={delta:.2f}, P={format_p(p_ab)}\nΔAUC C−B={d_bc:.2f}, P={format_p(p_bc)}",
+            x=0.03,
+            y=0.03,
+            ha="left",
+            va="bottom",
         )
 
     # 8C: SHAP
@@ -193,16 +198,19 @@ def run_prediction(
             "mean_abs_shap": np.abs(shap_values).mean(axis=0),
         }).sort_values("mean_abs_shap", ascending=False)
         shap_df.to_csv(output_dir / "figure8_shap_importance.csv", index=False, encoding="utf-8-sig")
-        top = shap_df.head(10)
+        top = shap_df.head(12)
         bar_colors = [
             PALETTE["microbiome"] if (f in micro_cols or f.startswith("genus_") or f.startswith("pcoa"))
             else PALETTE["inflammation"] if f in INFLAMMATION_FEATURES
             else PALETTE["clinical"]
             for f in top["feature"]
         ]
-        ax_shap.barh(top["feature"], top["mean_abs_shap"], color=bar_colors)
+        ylabels = [truncate_label(f.replace("genus_", "")) for f in top["feature"]]
+        ax_shap.barh(ylabels, top["mean_abs_shap"], color=bar_colors, height=0.65)
         ax_shap.invert_yaxis()
-        ax_shap.set_title("C. SHAP — Model C (extubation delay)")
+        ax_shap.set_xlabel("Mean |SHAP|")
+        ax_shap.set_title("C. SHAP — Model C (extubation delay)", pad=8)
+        ax_shap.tick_params(axis="y", labelsize=8)
     except Exception as exc:
         ax_shap.text(0.5, 0.5, f"SHAP unavailable:\n{exc}", ha="center", va="center")
         pd.Series({"shap_error": str(exc)}).to_csv(output_dir / "figure8_shap_error.csv")
@@ -226,12 +234,26 @@ def run_prediction(
         ax_mlp.text(xpos[0], sub["AUC"].iloc[0] + 0.02, f"{sub['AUC'].iloc[0]:.2f}", ha="center", fontsize=8)
         ax_mlp.text(xpos[1], sub["AUC"].iloc[1] + 0.02, f"{sub['AUC'].iloc[1]:.2f}", ha="center", fontsize=8)
     ax_mlp.set_xticks([0.5, 3.5])
-    ax_mlp.set_xticklabels(list(targets.values()))
-    ax_mlp.set_ylim(0, 1.05)
+    ax_mlp.set_xticklabels(list(targets.values()), fontsize=9)
+    ax_mlp.set_ylim(0, 1.08)
     ax_mlp.set_ylabel("AUC (LOO-CV)")
-    ax_mlp.set_title("D. MLP concept validation vs Logistic C")
+    ax_mlp.set_title("D. MLP concept validation vs Logistic C", pad=8)
+    ax_mlp.legend(
+        handles=[
+            mpatches.Patch(facecolor=PALETTE["delayed"], label="Logistic C"),
+            mpatches.Patch(facecolor="#8172B3", label="MLP D"),
+        ],
+        loc="upper right",
+        fontsize=8,
+        frameon=False,
+    )
 
-    fig.suptitle("Figure 8. Predictive models: Logistic A/B/C + MLP validation (LOO-CV)", y=1.01)
+    finalize_figure(
+        fig,
+        "Figure 8. Predictive models: Logistic A/B/C + MLP validation (LOO-CV)",
+        hspace=0.38,
+        wspace=0.32,
+    )
     save_figure(fig, output_dir, "figure8_prediction_roc")
 
     metrics_df = pd.DataFrame(all_metrics)

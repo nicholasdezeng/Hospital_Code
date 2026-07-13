@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -13,7 +14,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 from src.utils.microbiome import aggregate_taxonomy, relative_abundance
 from src.utils.stats import clr_transform, fdr_correct, format_p
-from src.visualization.style import PALETTE, apply_style, save_figure
+from src.visualization.style import PALETTE, apply_style, finalize_figure, format_taxon, heatmap_cbar_kw, save_figure
 
 
 def _lefse_like(rel_genus: pd.DataFrame, groups: pd.Series, lda_threshold: float = 2.0):
@@ -37,7 +38,6 @@ def _lefse_like(rel_genus: pd.DataFrame, groups: pd.Series, lda_threshold: float
     if sig.empty:
         sig = res.nsmallest(10, "p").copy()
 
-    # LDA effect size on CLR-transformed significant genera
     X = clr_transform(rel_genus[sig["genus"]])
     y = (groups == "Delayed").astype(int)
     if len(sig["genus"]) >= 2 and y.nunique() == 2:
@@ -61,28 +61,44 @@ def run_figure4(clinical: pd.DataFrame, output_dir: Path, lda_threshold: float =
     rel_genus = relative_abundance(aggregate_taxonomy(asv, taxonomy, "Genus"))
     lefse = _lefse_like(rel_genus, clinical["extubation_group"], lda_threshold=lda_threshold)
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, max(5, 0.35 * max(len(lefse), 3) + 2)))
+    n_rows = max(len(lefse), 3)
+    fig = plt.figure(figsize=(15, max(5.5, 0.42 * n_rows + 2.2)))
+    gs = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[1.0, 1.35], wspace=0.38)
+    ax_bar = fig.add_subplot(gs[0, 0])
+    ax_heat = fig.add_subplot(gs[0, 1])
 
     if lefse.empty:
-        axes[0].text(0.5, 0.5, "No significant genera", ha="center")
+        ax_bar.text(0.5, 0.5, "No significant genera", ha="center", va="center", transform=ax_bar.transAxes)
+        ax_bar.set_title("A. LEfSe-like differential genera", pad=8)
+        ax_heat.axis("off")
     else:
+        lefse = lefse.copy()
+        lefse["genus_label"] = lefse["genus"].map(format_taxon)
         colors = [PALETTE["delayed"] if g == "Delayed" else PALETTE["early"] for g in lefse["enriched_group"]]
-        axes[0].barh(lefse["genus"], lefse["lda_signed"], color=colors)
-        axes[0].axvline(0, color="black", linewidth=0.8)
-        axes[0].set_xlabel("LDA score (signed)")
-        axes[0].set_title("A. LEfSe-like differential genera")
+        ax_bar.barh(lefse["genus_label"], lefse["lda_signed"], color=colors, height=0.65)
+        ax_bar.axvline(0, color="black", linewidth=0.8)
+        ax_bar.set_xlabel("LDA score (signed)")
+        ax_bar.set_title("A. LEfSe-like differential genera", pad=8)
+        ax_bar.tick_params(axis="y", labelsize=9)
 
         order = clinical.sort_values("extubation_time_min").index
         heat_data = clr_transform(rel_genus.loc[order, lefse["genus"]])
-        group_colors = clinical.loc[order, "extubation_group"].map(
-            {"Early": PALETTE["early"], "Delayed": PALETTE["delayed"]}
+        heat_data.columns = lefse["genus_label"].tolist()
+        sns.heatmap(
+            heat_data.T,
+            cmap="RdBu_r",
+            center=0,
+            ax=ax_heat,
+            cbar_kws=heatmap_cbar_kw("CLR abundance"),
+            xticklabels=False,
+            yticklabels=True,
         )
-        sns.heatmap(heat_data.T, cmap="RdBu_r", center=0, ax=axes[1], cbar_kws={"label": "CLR abundance"})
-        axes[1].set_title("B. Differential genera heatmap")
-        axes[1].set_xlabel("Patients (sorted by extubation time)")
-        axes[1].set_ylabel("Genus")
+        ax_heat.set_title("B. Differential genera heatmap", pad=8)
+        ax_heat.set_xlabel(f"Patients (n={len(order)}, sorted by extubation time)")
+        ax_heat.set_ylabel("Genus")
+        ax_heat.tick_params(axis="y", labelsize=9)
 
-    fig.suptitle("Figure 4. Differential microbiota analysis between outcome groups", y=1.02)
+    finalize_figure(fig, "Figure 4. Differential microbiota analysis between outcome groups", wspace=0.38)
     save_figure(fig, output_dir, "figure4_differential_microbiota")
 
     lefse.to_csv(output_dir / "figure4_lefse_results.csv", index=False, encoding="utf-8-sig")
