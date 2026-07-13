@@ -20,10 +20,16 @@ PALETTE = {
 
 PHylum_COLORS = {
     "Firmicutes": "#4C72B0",
+    "Bacillota": "#4C72B0",
     "Proteobacteria": "#C44E52",
+    "Pseudomonadota": "#C44E52",
     "Bacteroidetes": "#55A868",
+    "Bacteroidota": "#55A868",
     "Actinobacteria": "#8172B3",
+    "Actinomycetota": "#8172B3",
     "Fusobacteria": "#CCB974",
+    "Fusobacteriota": "#CCB974",
+    "Unknown": "#E15759",
     "Other": "#BAB0AC",
 }
 

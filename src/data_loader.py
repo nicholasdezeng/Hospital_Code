@@ -47,8 +47,9 @@ def _parse_asa(value) -> float:
     if pd.isna(value):
         return np.nan
     text = str(value).strip().upper()
-    mapping = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
-    for k, v in mapping.items():
+    # 长罗马数字优先匹配，避免 "II" 被 "I" 误判为 1
+    mapping = [("V", 5), ("IV", 4), ("III", 3), ("II", 2), ("I", 1)]
+    for k, v in mapping:
         if k in text:
             return float(v)
     return _parse_numeric(value)
@@ -87,6 +88,7 @@ def load_clinical_excel(path: str | Path) -> pd.DataFrame:
     out["hypertension"] = df["病史"].astype(str).str.contains("高血压").astype(int)
     out["diabetes"] = df["病史"].astype(str).str.contains("糖尿病").astype(int)
     out["copd"] = df["病史"].astype(str).str.contains("COPD|慢阻").astype(int)
+    out["history_raw"] = df["病史"].astype(str)
     out["asa"] = df["ASA分级"].map(_parse_asa) if "ASA分级" in df.columns else np.nan
     out["surgery_duration_min"] = df["手术时长（min）"].map(_parse_numeric)
     out["anesthesia_duration_min"] = df["麻醉时长（min）"].map(_parse_numeric)

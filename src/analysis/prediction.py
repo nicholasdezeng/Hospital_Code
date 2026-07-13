@@ -21,7 +21,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.utils.microbiome import aggregate_taxonomy, relative_abundance
-from src.utils.stats import bootstrap_ci, delong_auc_test, format_p
+from src.utils.stats import bootstrap_auc_ci, delong_auc_test, format_p
 from src.visualization.style import PALETTE, apply_style, save_figure
 
 
@@ -75,7 +75,7 @@ def _metrics(y_true, y_prob, y_pred):
     return {"AUC": auc, "Accuracy": acc, "Sensitivity": sens, "Specificity": spec, "F1": f1}
 
 
-def run_prediction(clinical: pd.DataFrame, output_dir: Path, seed: int = 42) -> pd.DataFrame:
+def run_prediction(clinical: pd.DataFrame, output_dir: Path, seed: int = 42, n_boot: int = 1000) -> pd.DataFrame:
     apply_style()
     clinical, micro_cols = _build_microbiome_features(clinical)
 
@@ -105,7 +105,7 @@ def run_prediction(clinical: pd.DataFrame, output_dir: Path, seed: int = 42) -> 
             probs, preds = _loo_predict(X, y, seed=seed)
             prob_store[model_name] = probs
             m = _metrics(y.values, probs, preds)
-            auc_mean, auc_low, auc_high = bootstrap_ci(probs * y.values + (1 - probs) * (1 - y.values))
+            _, auc_low, auc_high = bootstrap_auc_ci(y.values, probs, n_boot=n_boot)
             m.update(
                 {
                     "Target": target_label,

@@ -77,6 +77,29 @@ def bootstrap_ci(values: np.ndarray, n_boot: int = 1000, ci: float = 0.95, seed:
     return float(np.mean(values)), float(low), float(high)
 
 
+def bootstrap_auc_ci(y_true, y_score, n_boot: int = 1000, ci: float = 0.95, seed: int = 42):
+    """对 (y_true, y_score) 对做 bootstrap，估计 AUC 置信区间。"""
+    from sklearn.metrics import roc_auc_score
+
+    y_true = np.asarray(y_true)
+    y_score = np.asarray(y_score)
+    idx = np.arange(len(y_true))
+    boots = []
+    rng = np.random.default_rng(seed)
+    for _ in range(n_boot):
+        b = rng.choice(idx, size=len(idx), replace=True)
+        if len(np.unique(y_true[b])) < 2:
+            continue
+        boots.append(roc_auc_score(y_true[b], y_score[b]))
+    if not boots:
+        point = roc_auc_score(y_true, y_score) if len(np.unique(y_true)) == 2 else np.nan
+        return point, np.nan, np.nan
+    point = roc_auc_score(y_true, y_score)
+    low = np.quantile(boots, (1 - ci) / 2)
+    high = np.quantile(boots, 1 - (1 - ci) / 2)
+    return float(point), float(low), float(high)
+
+
 def delong_auc_test(y_true, y_score_a, y_score_b, n_boot: int = 500, seed: int = 42):
     """Bootstrap ΔAUC 近似检验。"""
     from sklearn.metrics import roc_auc_score

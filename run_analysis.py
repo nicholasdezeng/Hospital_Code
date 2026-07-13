@@ -8,6 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 ROOT = Path(__file__).resolve().parent
@@ -22,7 +23,14 @@ from src.analysis.mediation import run_figure7
 from src.analysis.microbiome_desc import run_figure1
 from src.analysis.prediction import run_prediction
 from src.data_loader import load_asv_table, load_clinical_excel, load_taxonomy
-from src.preprocessing import add_outcome_groups, generate_demo_microbiome, merge_microbiome
+from src.preprocessing import (
+    add_outcome_groups,
+    apply_inclusion_exclusion,
+    filter_microbiome_qc,
+    generate_demo_microbiome,
+    merge_microbiome,
+    save_exclusion_log,
+)
 
 
 def load_config(config_path: Path) -> dict:
@@ -41,13 +49,18 @@ def main(config_path: str = "config.yaml"):
 
     clinical_path = (root / cfg["paths"]["clinical_data"]).resolve()
     print(f"[1/9] 加载临床数据: {clinical_path}")
-    clinical = load_clinical_excel(clinical_path)
+    clinical_raw = load_clinical_excel(clinical_path)
+    print(f"      原始样本: {len(clinical_raw)} 例")
+
+    clinical, clinical_log = apply_inclusion_exclusion(clinical_raw, cfg)
+    print(f"      临床纳入: {len(clinical)} 例（排除 {len(clinical_raw) - len(clinical)} 例）")
+
     clinical = add_outcome_groups(
         clinical,
         split=cfg["grouping"]["extubation_split"],
         fixed_min=cfg["grouping"]["extubation_fixed_min"],
     )
-    print(f"      纳入样本: {len(clinical)} 例")
+    exclusion_logs = [clinical_log]
 
     asv_path = Path(cfg["paths"]["microbiome_asv"])
     tax_path = Path(cfg["paths"]["taxonomy"])
@@ -61,6 +74,12 @@ def main(config_path: str = "config.yaml"):
         print(f"[2/9] 加载真实菌群数据")
         asv = load_asv_table(asv_path)
         taxonomy = load_taxonomy(tax_path)
+        print(f"      ASV 表: {asv.shape[0]} 样本 × {asv.shape[1]} ASV")
+        if cfg.get("qc", {}).get("enabled", True):
+            asv, taxonomy, qc_log = filter_microbiome_qc(asv, taxonomy, cfg)
+            exclusion_logs.append(qc_log)
+            n_qc_excl = int((qc_log["stage"] == "microbiome_qc").sum()) if not qc_log.empty else 0
+            print(f"      QC 后: {asv.shape[0]} 样本 × {asv.shape[1]} ASV（排除 {n_qc_excl} 例）")
     elif use_demo:
         print(f"[2/9] 未找到 ASV 数据，生成演示用菌群数据（请替换为真实测序结果）")
         asv, taxonomy = generate_demo_microbiome(clinical, seed=cfg["analysis"]["random_seed"])
@@ -71,7 +90,17 @@ def main(config_path: str = "config.yaml"):
     else:
         raise FileNotFoundError("缺少菌群数据，请将 ASV 表放入 data/microbiome/ 或开启 use_demo_microbiome")
 
+    pre_merge_ids = set(clinical.index)
     clinical = merge_microbiome(clinical, asv, taxonomy)
+    lost_ids = pre_merge_ids - set(clinical.index)
+    if lost_ids:
+        merge_log = pd.DataFrame(
+            [{"sample_id": sid, "stage": "merge", "reason": "临床样本与 QC 后菌群表无交集"} for sid in sorted(lost_ids)]
+        )
+        exclusion_logs.append(merge_log)
+    print(f"      最终纳入分析: {len(clinical)} 例")
+
+    exclusion_df = save_exclusion_log(exclusion_logs, out_root)
 
     print("[3/9] Table 1 — 基线特征")
     run_baseline(clinical, tab_dir)
@@ -92,7 +121,7 @@ def main(config_path: str = "config.yaml"):
     run_figure7(clinical, fig_dir, n_boot=cfg["analysis"]["bootstrap_n"])
 
     print("[8/9] Figure 8 & Table 2 — 预测模型")
-    run_prediction(clinical, fig_dir)
+    run_prediction(clinical, fig_dir, n_boot=cfg["analysis"]["bootstrap_n"])
 
     print("[9/9] Figure 9 — 关键预后菌群")
     run_figure9(clinical, fig_dir)
@@ -100,11 +129,15 @@ def main(config_path: str = "config.yaml"):
     summary = {
         "project": cfg["project"]["name"],
         "run_time": datetime.now().isoformat(),
+        "n_samples_raw": len(clinical_raw),
         "n_samples": len(clinical),
+        "n_excluded": int(len(clinical_raw) - len(clinical)) + int(exclusion_df[exclusion_df["stage"] == "microbiome_qc"].shape[0]) if not exclusion_df.empty else 0,
         "n_early": int((clinical["extubation_group"] == "Early").sum()),
         "n_delayed": int((clinical["extubation_group"] == "Delayed").sum()),
         "demo_microbiome": use_demo and not (asv_path.exists() and tax_path.exists()),
         "output_dir": str(out_root),
+        "qc_applied": bool(cfg.get("qc")),
+        "inclusion_applied": bool(cfg.get("inclusion")),
     }
     with open(out_root / "run_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)

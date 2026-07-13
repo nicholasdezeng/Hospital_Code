@@ -53,6 +53,24 @@ analysis:
   fdr_alpha: 0.05
   use_demo_microbiome: false   # 服务器：有真实数据后必须 false
 
+# 纳入排除标准（研究方案）
+inclusion:
+  enabled: true
+  require_extubation_time: true
+  require_core_clinical: true
+  exclude_history: true
+  max_clinical_missing_frac: 0.20
+
+# 菌群 QC（基于上次跑通结果的经验阈值，无需重跑 DADA2）
+qc:
+  enabled: true
+  min_total_reads: 1000
+  min_observed_asv: 20
+  max_observed_asv: 500
+  max_shannon: 6.0
+  asv_min_prevalence: 0.10
+  remove_unassigned_taxonomy: true
+
 visualization:
   dpi: 300
   fig_format: "png"
