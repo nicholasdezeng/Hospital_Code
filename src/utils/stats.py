@@ -142,6 +142,19 @@ def delong_auc_test(y_true, y_score_a, y_score_b, n_boot: int = 500, seed: int =
     return delta, p, (np.quantile(deltas, 0.025), np.quantile(deltas, 0.975))
 
 
+def _gower_center(distance_matrix: np.ndarray) -> np.ndarray:
+    """将距离矩阵转为 Gower 双中心化矩阵（dbRDA / PERMANOVA 用）。"""
+    n = distance_matrix.shape[0]
+    a = -0.5 * (np.asarray(distance_matrix, dtype=float) ** 2)
+    h = np.eye(n) - np.ones((n, n)) / n
+    return h @ a @ h
+
+
+def _hat_matrix(x: np.ndarray) -> np.ndarray:
+    """投影矩阵 H = X (X'X)^+ X'。"""
+    return x @ np.linalg.pinv(x.T @ x) @ x.T
+
+
 def permanova(distance_matrix: np.ndarray, groups: np.ndarray, permutations: int = 999, seed: int = 42):
     """简化 PERMANOVA 实现。"""
     groups = np.asarray(groups)
@@ -175,6 +188,96 @@ def permanova(distance_matrix: np.ndarray, groups: np.ndarray, permutations: int
         perm_f.append((ss_b / max(df_between, 1)) / (ss_w / max(df_within, 1)))
     p = (np.sum(np.array(perm_f) >= f_stat) + 1) / (permutations + 1)
     return {"F": f_stat, "R2": r2, "p": p}
+
+
+def permanova_with_covariates(
+    distance_matrix: np.ndarray,
+    groups: np.ndarray,
+    covariates: np.ndarray | pd.DataFrame | None = None,
+    permutations: int = 999,
+    seed: int = 42,
+) -> dict:
+    """控制协变量后的 PERMANOVA（dbRDA：组效应在协变量残差空间中检验）。
+
+    covariates: shape (n, p)，如 ASA + 麻醉时长；可为 DataFrame。
+    """
+    groups = np.asarray(groups)
+    n = distance_matrix.shape[0]
+    g = _gower_center(distance_matrix)
+
+    if covariates is None:
+        x_cov = np.ones((n, 1))
+    else:
+        if isinstance(covariates, pd.DataFrame):
+            cov = covariates.to_numpy(dtype=float)
+        else:
+            cov = np.asarray(covariates, dtype=float)
+        if cov.ndim == 1:
+            cov = cov.reshape(-1, 1)
+        x_cov = np.column_stack([np.ones(n), cov])
+
+    # 组编码（二分类或哑变量）
+    levels = np.unique(groups)
+    if len(levels) < 2:
+        return {"F": np.nan, "R2": np.nan, "p": np.nan, "n_covariates": x_cov.shape[1] - 1}
+
+    if len(levels) == 2:
+        z = (groups == levels[1]).astype(float).reshape(-1, 1)
+        df1 = 1
+    else:
+        z = pd.get_dummies(groups, drop_first=True).to_numpy(dtype=float)
+        df1 = z.shape[1]
+
+    # 残差化：先去除协变量，再检验组效应（Type III / partial）
+    h_cov = _hat_matrix(x_cov)
+    i_h = np.eye(n) - h_cov
+    g_res = i_h @ g @ i_h
+    z_res = i_h @ z
+
+    # 若组变量与协变量完全共线，无法检验
+    if np.linalg.matrix_rank(z_res, tol=1e-8) < df1:
+        return {
+            "F": np.nan,
+            "R2": np.nan,
+            "p": np.nan,
+            "n_covariates": int(x_cov.shape[1] - 1),
+            "note": "group collinear with covariates",
+        }
+
+    h_z = _hat_matrix(z_res)
+    ss_group = float(np.trace(h_z @ g_res))
+    ss_total = float(np.trace(g_res))
+    ss_resid = ss_total - ss_group
+    df2 = n - x_cov.shape[1] - df1
+    if df2 <= 0 or ss_resid <= 0:
+        f_stat = np.nan
+    else:
+        f_stat = (ss_group / df1) / (ss_resid / df2)
+    r2 = ss_group / ss_total if ss_total > 0 else np.nan
+
+    rng = np.random.default_rng(seed)
+    ge = 0
+    for _ in range(permutations):
+        z_perm = rng.permutation(z)
+        z_perm_res = i_h @ z_perm
+        if np.linalg.matrix_rank(z_perm_res, tol=1e-8) < df1:
+            continue
+        h_perm = _hat_matrix(z_perm_res)
+        ss_g = float(np.trace(h_perm @ g_res))
+        ss_r = ss_total - ss_g
+        if ss_r <= 0:
+            continue
+        f_perm = (ss_g / df1) / (ss_r / df2)
+        if f_perm >= f_stat:
+            ge += 1
+    p = (ge + 1) / (permutations + 1)
+    return {
+        "F": float(f_stat) if pd.notna(f_stat) else np.nan,
+        "R2": float(r2) if pd.notna(r2) else np.nan,
+        "p": float(p),
+        "n_covariates": int(x_cov.shape[1] - 1),
+        "covariates": "yes" if covariates is not None else "no",
+    }
 
 
 def clr_transform(abundance: pd.DataFrame, pseudocount: float = 1e-6) -> pd.DataFrame:

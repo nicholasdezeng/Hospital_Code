@@ -449,6 +449,12 @@ def export_results_workbook(
         _write_df_sheet(writer, "09b_属水平Wilcoxon", genus_w if genus_w is not None else pd.DataFrame())
         ae_desc = _read_csv(tab_dir / "table_ae_descriptive.csv")
         _write_df_sheet(writer, "17_不良反应描述性", ae_desc if ae_desc is not None else pd.DataFrame())
+        nlr_audit = _read_csv(tab_dir / "nlr_audit.csv")
+        _write_df_sheet(writer, "18_NLR口径核查", nlr_audit if nlr_audit is not None else pd.DataFrame())
+        t1_notes = _read_csv(tab_dir / "table1_footnotes.csv")
+        _write_df_sheet(writer, "04c_Table1脚注", t1_notes if t1_notes is not None else pd.DataFrame())
+        cprime = _read_csv(tab_dir / "model_c_prime_decision.csv")
+        _write_df_sheet(writer, "19_ModelCprime触发评估", cprime if cprime is not None else pd.DataFrame())
         _write_df_sheet(writer, SHEET_FIG1, fig1_phylum if fig1_phylum is not None else pd.DataFrame())
         _write_df_sheet(writer, SHEET_FIG3, permanova if permanova is not None else pd.DataFrame())
         if lefse is not None and not lefse.empty:

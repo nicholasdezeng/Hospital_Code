@@ -12,7 +12,15 @@ import seaborn as sns
 from scipy import stats
 from sklearn.decomposition import PCA
 
-from src.utils.stats import compare_continuous, format_p, permanova, sig_stars
+from src.utils.stats import (
+    betadisper_test,
+    cliffs_delta,
+    compare_continuous,
+    format_p,
+    permanova,
+    permanova_with_covariates,
+    sig_stars,
+)
 from src.visualization.style import PALETTE, add_stat_box, apply_style, finalize_figure, save_figure
 
 
@@ -101,8 +109,6 @@ def run_figure2(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     finalize_figure(fig, "Figure 2. Alpha diversity comparisons between outcome groups")
     save_figure(fig, output_dir, "figure2_alpha_diversity")
 
-    from src.utils.stats import cliffs_delta
-
     early = clinical[clinical["extubation_group"] == "Early"]
     delayed = clinical[clinical["extubation_group"] == "Delayed"]
     stats_df = pd.DataFrame([
@@ -132,14 +138,28 @@ def run_figure3(clinical: pd.DataFrame, output_dir: Path, permutations: int = 99
     pcoa = pcoa.join(clinical[["extubation_group", "adverse_event"]])
 
     perm = permanova(dist, groups, permutations=permutations)
+    # 优化方案：控制 ASA + 麻醉时长后的组效应
+    cov_cols = [c for c in ["asa", "anesthesia_duration_min"] if c in clinical.columns]
+    perm_adj = permanova_with_covariates(
+        dist,
+        groups,
+        covariates=clinical[cov_cols] if cov_cols else None,
+        permutations=permutations,
+    )
 
     perm_df = pd.DataFrame([{
+        "model": "unadjusted",
         "F": perm["F"], "R2": perm["R2"], "p": perm["p"],
         "permutations": permutations, "n_samples": len(sample_ids),
+        "covariates": "",
+    }, {
+        "model": "adjusted_asa_anesthesia",
+        "F": perm_adj["F"], "R2": perm_adj["R2"], "p": perm_adj["p"],
+        "permutations": permutations, "n_samples": len(sample_ids),
+        "covariates": "+".join(cov_cols),
     }])
     perm_df.to_csv(output_dir / "figure3_permanova.csv", index=False, encoding="utf-8-sig")
 
-    from src.utils.stats import betadisper_test
     bd = betadisper_test(dist, groups)
     pd.DataFrame([{
         "test": "betadisper",
@@ -169,7 +189,13 @@ def run_figure3(clinical: pd.DataFrame, output_dir: Path, permutations: int = 99
     axes[0].set_title("A. PCoA (Bray-Curtis)", pad=8)
     add_stat_box(
         axes[0],
-        f"PERMANOVA\nF={perm['F']:.2f}, R²={perm['R2']:.3f}\nP={format_p(perm['p'])}",
+        (
+            f"PERMANOVA\n"
+            f"Unadj F={perm['F']:.2f}, R²={perm['R2']:.3f}, P={format_p(perm['p'])}\n"
+            f"Adj(ASA+anes) F={perm_adj['F']:.2f}, R²={perm_adj['R2']:.3f}, "
+            f"P={format_p(perm_adj['p'])}\n"
+            f"betadisper P={format_p(bd['p'])}"
+        ),
         x=0.03,
         y=0.97,
         ha="left",

@@ -22,6 +22,7 @@ from src.analysis.differential import run_figure4
 from src.analysis.inflammation_axis import run_figure5, run_figure6
 from src.analysis.mediation import run_figure7
 from src.analysis.microbiome_desc import run_figure1
+from src.analysis.model_c_prime import assess_and_maybe_run_model_c_prime
 from src.analysis.multivariable import run_continuous_extubation, run_multivariable
 from src.analysis.prediction import run_prediction
 from src.analysis.sensitivity import run_sensitivity_cohorts
@@ -31,7 +32,7 @@ from src.analysis.supplementary_tables import (
     run_shannon_inflammation_matrix,
     run_table1_supplement,
 )
-from src.data_loader import load_asv_table, load_clinical_excel, load_taxonomy
+from src.data_loader import audit_nlr, load_asv_table, load_clinical_excel, load_taxonomy
 from src.preprocessing import (
     add_outcome_groups,
     apply_inclusion_exclusion,
@@ -62,6 +63,8 @@ TABLE_CATALOG = {
     "table3": "Table 3 — 多因素 Logistic",
     "genus_wilcoxon": "属水平 Wilcoxon + FDR",
     "ae_descriptive": "不良反应描述性",
+    "nlr_audit": "NLR 口径核查",
+    "model_c_prime": "Model C' 触发评估",
     "sensitivity": "敏感性分析",
 }
 
@@ -282,11 +285,18 @@ def main(
     modules_completed: list[str] = []
     generated_files: list[str] = []
 
+    if "nlr_audit" in selected_tables or run_all:
+        print("\n▶ NLR 口径核查")
+        audit_nlr(clinical, tab_dir)
+        modules_completed.append("nlr_audit")
+        generated_files.append(str(tab_dir / "nlr_audit.csv"))
+
     if "table1" in selected_tables:
         print("\n▶ Table 1 — 基线特征")
         run_baseline(clinical, tab_dir)
         modules_completed.append("table1_baseline")
         generated_files.append(str(tab_dir / "table1_baseline.csv"))
+        generated_files.append(str(tab_dir / "table1_footnotes.csv"))
 
     if "table1_supplement" in selected_tables:
         print("\n▶ Table 1-补充 — 两组 α 多样性")
@@ -338,6 +348,18 @@ def main(
         run_genus_wilcoxon_table(clinical, tab_dir)
         modules_completed.append("table_genus_wilcoxon")
         generated_files.append(str(tab_dir / "table_genus_wilcoxon.csv"))
+
+    if "model_c_prime" in selected_tables or ("genus_wilcoxon" in selected_tables and run_all):
+        print("\n▶ Model C' 触发评估")
+        assess_and_maybe_run_model_c_prime(
+            clinical,
+            tab_dir,
+            n_boot=cfg["analysis"]["bootstrap_n"],
+            n_perm=cfg["analysis"].get("permutation_n", 500),
+            seed=cfg["analysis"]["random_seed"],
+        )
+        modules_completed.append("model_c_prime_decision")
+        generated_files.append(str(tab_dir / "model_c_prime_decision.csv"))
 
     if "ae_descriptive" in selected_tables:
         print("\n▶ 不良反应描述性分析")
