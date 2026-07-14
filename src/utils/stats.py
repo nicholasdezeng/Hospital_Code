@@ -184,6 +184,41 @@ def clr_transform(abundance: pd.DataFrame, pseudocount: float = 1e-6) -> pd.Data
     return log_mat.sub(geom, axis=0)
 
 
+def cliffs_delta(x: pd.Series, y: pd.Series) -> float:
+    """Cliff's delta 效应量（Mann-Whitney 配套）。"""
+    x = pd.to_numeric(x, errors="coerce").dropna().values
+    y = pd.to_numeric(y, errors="coerce").dropna().values
+    if len(x) == 0 or len(y) == 0:
+        return float("nan")
+    gt = sum(a > b for a in x for b in y)
+    lt = sum(a < b for a in x for b in y)
+    return float((gt - lt) / (len(x) * len(y)))
+
+
+def betadisper_test(distance_matrix: np.ndarray, groups: np.ndarray) -> dict:
+    """组内离散度（betadisper 简化版）：比较各样本到组内均距，Mann-Whitney。"""
+    groups = np.asarray(groups)
+    dispersions: dict[str, list[float]] = {}
+    for g in np.unique(groups):
+        idx = np.where(groups == g)[0]
+        sub = distance_matrix[np.ix_(idx, idx)]
+        dispersions[str(g)] = sub.mean(axis=1).tolist()
+    keys = list(dispersions.keys())
+    if len(keys) != 2:
+        return {"p": float("nan"), "statistic": float("nan"), "groups": keys}
+    a, b = dispersions[keys[0]], dispersions[keys[1]]
+    stat, p = stats.mannwhitneyu(a, b, alternative="two-sided")
+    return {"p": float(p), "statistic": float(stat), "groups": keys}
+
+
+def bootstrap_delta_auc_ci(
+    y_true, y_score_a, y_score_b, n_boot: int = 1000, ci: float = 0.95, seed: int = 42
+):
+    """Bootstrap ΔAUC = AUC(B) - AUC(A) 置信区间。"""
+    delta, p, (low, high) = delong_auc_test(y_true, y_score_a, y_score_b, n_boot=n_boot, seed=seed)
+    return float(delta), float(low), float(high), float(p)
+
+
 def format_p(p: float) -> str:
     if pd.isna(p):
         return "NA"

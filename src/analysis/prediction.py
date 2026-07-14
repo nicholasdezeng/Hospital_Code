@@ -1,4 +1,4 @@
-"""Figure 8 & Table 2: 预测模型（Logistic A/B/C + MLP 概念验证）。"""
+"""Figure 8 & Table 2: 预测模型（2×2 析因 Model A/B/C/E + MLP 补充）。"""
 
 from __future__ import annotations
 
@@ -17,41 +17,40 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.utils.microbiome import aggregate_taxonomy, relative_abundance
-from src.utils.stats import bootstrap_auc_ci, delong_auc_test, format_p, permutation_auc_pvalue
-from src.visualization.style import PALETTE, add_stat_box, apply_style, finalize_figure, save_figure, truncate_label
+from src.utils.stats import (
+    bootstrap_auc_ci,
+    bootstrap_delta_auc_ci,
+    format_p,
+    permutation_auc_pvalue,
+)
+from src.visualization.style import PALETTE, add_stat_box, apply_style, finalize_figure, save_figure
 
+# 优化方案：与 Table 3 / Model E 对齐的精简特征
+CLINICAL_BASE = ["asa", "anesthesia_duration_min"]
+INFLAMMATION = ["log_crp"]
+MICROBIOME = ["shannon"]
 
-CLINICAL_FEATURES = ["age", "sex", "bmi", "asa", "surgery_duration_min", "anesthesia_duration_min", "opioid_morphine_mg"]
-INFLAMMATION_FEATURES = ["wbc", "log_crp", "log_pct", "nlr"]
-MICROBIOME_FEATURES = ["shannon", "chao1", "pielou_j"]
+MODEL_A = CLINICAL_BASE
+MODEL_B = CLINICAL_BASE + INFLAMMATION
+MODEL_C = CLINICAL_BASE + MICROBIOME  # 不含炎症（2×2 析因）
+MODEL_E = CLINICAL_BASE + INFLAMMATION + MICROBIOME
 
-
-def _build_microbiome_features(clinical: pd.DataFrame) -> pd.DataFrame:
-    asv = clinical.attrs["asv"]
-    taxonomy = clinical.attrs["taxonomy"]
-    rel_genus = relative_abundance(aggregate_taxonomy(asv, taxonomy, "Genus"))
-    key_genera = ["Pseudomonas", "Klebsiella", "Prevotella", "Veillonella", "Streptococcus", "Haemophilus"]
-    for g in key_genera:
-        if g in rel_genus.columns:
-            clinical[f"genus_{g}"] = rel_genus[g]
-    if "pcoa" in clinical.attrs:
-        clinical["pcoa_pc1"] = clinical.attrs["pcoa"]["PC1"]
-        clinical["pcoa_pc2"] = clinical.attrs["pcoa"]["PC2"]
-    micro_cols = [
-        c for c in clinical.columns
-        if c.startswith("genus_") or c in MICROBIOME_FEATURES + ["pcoa_pc1", "pcoa_pc2"]
-    ]
-    return clinical, micro_cols
+MAIN_MODELS = {
+    "Model A (Clinical)": MODEL_A,
+    "Model B (+Inflammation)": MODEL_B,
+    "Model C (+Microbiome)": MODEL_C,
+    "Model E (All)": MODEL_E,
+}
 
 
 def _loo_predict(X: pd.DataFrame, y: pd.Series, seed: int = 42, use_mlp: bool = False):
     loo = LeaveOneOut()
     probs = np.zeros(len(y))
     preds = np.zeros(len(y))
+    pos_label = 1
     if use_mlp:
         clf = MLPClassifier(
-            hidden_layer_sizes=(32, 16),
+            hidden_layer_sizes=(16, 8),
             activation="relu",
             max_iter=3000,
             random_state=seed,
@@ -68,9 +67,12 @@ def _loo_predict(X: pd.DataFrame, y: pd.Series, seed: int = 42, use_mlp: bool = 
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train = y.iloc[train_idx]
         pipe.fit(X_train, y_train)
-        prob = pipe.predict_proba(X_test)[:, 1]
-        probs[test_idx[0]] = prob[0]
-        preds[test_idx[0]] = int(prob[0] >= 0.5)
+        proba = pipe.predict_proba(X_test)
+        classes = list(pipe.named_steps["clf"].classes_)
+        pos_idx = classes.index(pos_label) if pos_label in classes else 1
+        prob = proba[:, pos_idx][0]
+        probs[test_idx[0]] = prob
+        preds[test_idx[0]] = int(prob >= 0.5)
     return probs, preds
 
 
@@ -85,6 +87,51 @@ def _metrics(y_true, y_prob, y_pred):
     }
 
 
+def _eval_model(name: str, feats: list[str], valid: pd.DataFrame, y: pd.Series, *, n_boot: int, n_perm: int, seed: int):
+    probs, preds = _loo_predict(valid[feats], y, seed=seed)
+    m = _metrics(y.values, probs, preds)
+    _, auc_low, auc_high = bootstrap_auc_ci(y.values, probs, n_boot=n_boot)
+    perm_p = permutation_auc_pvalue(y.values, probs, n_perm=n_perm, seed=seed)
+    m.update({
+        "Target": "Extubation delay",
+        "Model": name,
+        "AUC_CI_low": auc_low,
+        "AUC_CI_high": auc_high,
+        "Permutation_P": perm_p,
+    })
+    return m, probs
+
+
+def _factorial_table(prob_store: dict[str, np.ndarray], y: np.ndarray, n_boot: int, seed: int) -> pd.DataFrame:
+    pairs = [
+        ("B - A（炎症单独贡献）", "Model A (Clinical)", "Model B (+Inflammation)"),
+        ("C - A（菌群单独贡献）", "Model A (Clinical)", "Model C (+Microbiome)"),
+        ("E - B（菌群在炎症基础上增量）", "Model B (+Inflammation)", "Model E (All)"),
+        ("E - C（炎症在菌群基础上增量）", "Model C (+Microbiome)", "Model E (All)"),
+    ]
+    rows = []
+    deltas = {}
+    for label, a_name, b_name in pairs:
+        delta, ci_low, ci_high, p = bootstrap_delta_auc_ci(
+            y, prob_store[a_name], prob_store[b_name], n_boot=n_boot, seed=seed
+        )
+        deltas[label] = delta
+        rows.append({
+            "比较": label,
+            "ΔAUC": f"{delta:.3f}",
+            "95%CI": f"{ci_low:.3f}-{ci_high:.3f}",
+            "Bootstrap_P": format_p(p),
+        })
+    interaction = deltas.get("E - B（菌群在炎症基础上增量）", np.nan) - deltas.get("C - A（菌群单独贡献）", np.nan)
+    rows.append({
+        "比较": "交互效应 = (E-B) - (C-A)",
+        "ΔAUC": f"{interaction:.3f}" if pd.notna(interaction) else "NA",
+        "95%CI": "—",
+        "Bootstrap_P": "—",
+    })
+    return pd.DataFrame(rows)
+
+
 def run_prediction(
     clinical: pd.DataFrame,
     output_dir: Path,
@@ -94,174 +141,140 @@ def run_prediction(
     tables_dir: Path | None = None,
 ) -> pd.DataFrame:
     apply_style()
-    clinical, micro_cols = _build_microbiome_features(clinical)
+    target_col = "delayed_extubation"
+    all_feats = list(dict.fromkeys(MODEL_E))
+    valid = clinical[all_feats + [target_col]].dropna()
+    y = valid[target_col].astype(int)
 
-    targets = {
-        "delayed_extubation": "Extubation delay",
-        "adverse_event": "Adverse events",
-    }
-    model_defs = {
-        "Model A (Clinical)": CLINICAL_FEATURES,
-        "Model B (+Inflammation)": CLINICAL_FEATURES + INFLAMMATION_FEATURES,
-        "Model C (+Microbiome)": CLINICAL_FEATURES + INFLAMMATION_FEATURES + micro_cols,
-    }
-    mlp_feats = model_defs["Model C (+Microbiome)"]
+    main_metrics = []
+    prob_store: dict[str, np.ndarray] = {}
+    for name, feats in MAIN_MODELS.items():
+        m, probs = _eval_model(name, feats, valid, y, n_boot=n_boot, n_perm=n_perm, seed=seed)
+        main_metrics.append(m)
+        prob_store[name] = probs
 
-    all_metrics = []
-    fig, axes = plt.subplots(2, 2, figsize=(15, 11))
-    colors = ["#9DA5B4", "#4C72B0", PALETTE["delayed"]]
-    valid_store = {}
-
-    for t_idx, (target_col, target_label) in enumerate(targets.items()):
-        ax = axes[0, t_idx]
-        valid = clinical[mlp_feats + [target_col]].dropna()
-        y = valid[target_col].astype(int)
-        valid_store[target_col] = valid
-
-        prob_store = {}
-        for (model_name, feats), color in zip(model_defs.items(), colors):
-            X = valid[feats]
-            probs, preds = _loo_predict(X, y, seed=seed)
-            prob_store[model_name] = probs
-            m = _metrics(y.values, probs, preds)
-            _, auc_low, auc_high = bootstrap_auc_ci(y.values, probs, n_boot=n_boot)
-            perm_p = permutation_auc_pvalue(y.values, probs, n_perm=n_perm, seed=seed)
-            m.update({
-                "Target": target_label,
-                "Model": model_name,
-                "AUC_CI_low": auc_low,
-                "AUC_CI_high": auc_high,
-                "Permutation_P": perm_p,
+    # 补充：不良反应 + MLP（移出主表）
+    supp_metrics = []
+    ae_col = "adverse_event"
+    if ae_col in clinical.columns:
+        ae_valid = clinical[MODEL_E + [ae_col]].dropna()
+        if len(ae_valid) >= 10 and ae_valid[ae_col].nunique() == 2:
+            y_ae = ae_valid[ae_col].astype(int)
+            for name, feats in MAIN_MODELS.items():
+                m, _ = _eval_model(
+                    name.replace("Extubation delay", "Adverse events"),
+                    feats,
+                    ae_valid,
+                    y_ae,
+                    n_boot=n_boot,
+                    n_perm=n_perm,
+                    seed=seed,
+                )
+                m["Target"] = "Adverse events"
+                m["Model"] = name
+                supp_metrics.append(m)
+            mlp_probs, mlp_preds = _loo_predict(ae_valid[MODEL_E], y_ae, seed=seed, use_mlp=True)
+            m_mlp = _metrics(y_ae.values, mlp_probs, mlp_preds)
+            _, low, high = bootstrap_auc_ci(y_ae.values, mlp_probs, n_boot=n_boot)
+            m_mlp.update({
+                "Target": "Adverse events",
+                "Model": "Model D (MLP)",
+                "AUC_CI_low": low,
+                "AUC_CI_high": high,
+                "Permutation_P": permutation_auc_pvalue(y_ae.values, mlp_probs, n_perm=n_perm, seed=seed),
             })
-            all_metrics.append(m)
-            fpr, tpr, _ = roc_curve(y, probs)
-            short = model_name.split("(")[1].strip(")")
-            ax.plot(fpr, tpr, label=f"{short}: {m['AUC']:.2f}", color=color)
+            supp_metrics.append(m_mlp)
 
-        # Model D: MLP 概念验证（方案要求）
-        mlp_probs, mlp_preds = _loo_predict(valid[mlp_feats], y, seed=seed, use_mlp=True)
-        m_mlp = _metrics(y.values, mlp_probs, mlp_preds)
-        _, mlp_low, mlp_high = bootstrap_auc_ci(y.values, mlp_probs, n_boot=n_boot)
-        mlp_perm = permutation_auc_pvalue(y.values, mlp_probs, n_perm=n_perm, seed=seed)
-        m_mlp.update({
-            "Target": target_label,
-            "Model": "Model D (MLP)",
-            "AUC_CI_low": mlp_low,
-            "AUC_CI_high": mlp_high,
-            "Permutation_P": mlp_perm,
-        })
-        all_metrics.append(m_mlp)
-        fpr_m, tpr_m, _ = roc_curve(y, mlp_probs)
-        ax.plot(fpr_m, tpr_m, "--", label=f"MLP: {m_mlp['AUC']:.2f}", color="#8172B3", linewidth=1.8)
+    mlp_probs, mlp_preds = _loo_predict(valid[MODEL_E], y, seed=seed, use_mlp=True)
+    m_mlp_main = _metrics(y.values, mlp_probs, mlp_preds)
+    _, mlp_low, mlp_high = bootstrap_auc_ci(y.values, mlp_probs, n_boot=n_boot)
+    m_mlp_main.update({
+        "Target": "Extubation delay",
+        "Model": "Model D (MLP)",
+        "AUC_CI_low": mlp_low,
+        "AUC_CI_high": mlp_high,
+        "Permutation_P": permutation_auc_pvalue(y.values, mlp_probs, n_perm=n_perm, seed=seed),
+    })
+    supp_metrics.append(m_mlp_main)
 
-        delta, p_ab, _ = delong_auc_test(
-            y.values, prob_store["Model A (Clinical)"], prob_store["Model B (+Inflammation)"]
-        )
-        d_bc, p_bc, _ = delong_auc_test(
-            y.values, prob_store["Model B (+Inflammation)"], prob_store["Model C (+Microbiome)"]
-        )
-        ax.plot([0, 1], [0, 1], ":", color="gray", linewidth=1)
-        panel = "A" if t_idx == 0 else "B"
-        ax.set_title(f"{panel}. ROC — {target_label}", pad=8)
-        ax.set_xlabel("False positive rate")
-        ax.set_ylabel("True positive rate")
-        ax.legend(fontsize=7, loc="lower right", frameon=True, fancybox=False, edgecolor="#CCCCCC")
-        add_stat_box(
-            ax,
-            f"ΔAUC B−A={delta:.2f}, P={format_p(p_ab)}\nΔAUC C−B={d_bc:.2f}, P={format_p(p_bc)}",
-            x=0.03,
-            y=0.03,
-            ha="left",
-            va="bottom",
-        )
+    factorial_df = _factorial_table(prob_store, y.values, n_boot=n_boot, seed=seed)
 
-    # 8C: SHAP
-    ax_shap = axes[1, 0]
+    # ── Figure 8：主文 A/B/C/E ROC ──
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    colors = ["#9DA5B4", "#4C72B0", PALETTE["microbiome"], PALETTE["delayed"]]
+    ax = axes[0]
+    for (name, _), color in zip(MAIN_MODELS.items(), colors):
+        fpr, tpr, _ = roc_curve(y, prob_store[name])
+        auc = roc_auc_score(y, prob_store[name])
+        short = name.split("(")[1].strip(")")
+        ax.plot(fpr, tpr, label=f"{short}: {auc:.2f}", color=color, linewidth=2)
+    ax.plot([0, 1], [0, 1], ":", color="gray", linewidth=1)
+    ax.set_title("A. ROC — Extubation delay (A/B/C/E)", pad=8)
+    ax.set_xlabel("False positive rate")
+    ax.set_ylabel("True positive rate")
+    ax.legend(fontsize=8, loc="lower right")
+    d_eb = factorial_df[factorial_df["比较"].str.startswith("E - B")]["ΔAUC"].iloc[0]
+    d_ba = factorial_df[factorial_df["比较"].str.startswith("B - A")]["ΔAUC"].iloc[0]
+    add_stat_box(ax, f"ΔAUC B−A={d_ba}\nΔAUC E−B={d_eb}", x=0.03, y=0.03, ha="left", va="bottom")
+
+    # SHAP on Model E
+    ax_shap = axes[1]
     try:
-        target_col = "delayed_extubation"
-        feats = model_defs["Model C (+Microbiome)"]
-        valid = valid_store.get(target_col, clinical[feats + [target_col]].dropna())
-        X = valid[feats]
-        y = valid[target_col].astype(int)
         pipe = Pipeline([
             ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
             ("clf", LogisticRegression(max_iter=3000, class_weight="balanced", random_state=seed)),
         ])
+        X = valid[MODEL_E]
         pipe.fit(X, y)
         X_scaled = pipe.named_steps["scaler"].transform(pipe.named_steps["imputer"].transform(X))
-        explainer = shap.LinearExplainer(pipe.named_steps["clf"], X_scaled, feature_names=feats)
+        explainer = shap.LinearExplainer(pipe.named_steps["clf"], X_scaled, feature_names=MODEL_E)
         shap_values = explainer.shap_values(X_scaled)
         if isinstance(shap_values, list):
             shap_values = shap_values[1]
         shap_df = pd.DataFrame({
-            "feature": feats,
+            "feature": MODEL_E,
             "mean_abs_shap": np.abs(shap_values).mean(axis=0),
         }).sort_values("mean_abs_shap", ascending=False)
         shap_df.to_csv(output_dir / "figure8_shap_importance.csv", index=False, encoding="utf-8-sig")
-        top = shap_df.head(12)
         bar_colors = [
-            PALETTE["microbiome"] if (f in micro_cols or f.startswith("genus_") or f.startswith("pcoa"))
-            else PALETTE["inflammation"] if f in INFLAMMATION_FEATURES
+            PALETTE["microbiome"] if f == "shannon"
+            else PALETTE["inflammation"] if f == "log_crp"
             else PALETTE["clinical"]
-            for f in top["feature"]
+            for f in shap_df["feature"]
         ]
-        ylabels = [truncate_label(f.replace("genus_", "")) for f in top["feature"]]
-        ax_shap.barh(ylabels, top["mean_abs_shap"], color=bar_colors, height=0.65)
+        ax_shap.barh(shap_df["feature"], shap_df["mean_abs_shap"], color=bar_colors, height=0.55)
         ax_shap.invert_yaxis()
         ax_shap.set_xlabel("Mean |SHAP|")
-        ax_shap.set_title("C. SHAP — Model C (extubation delay)", pad=8)
-        ax_shap.tick_params(axis="y", labelsize=8)
+        ax_shap.set_title("B. SHAP — Model E", pad=8)
     except Exception as exc:
         ax_shap.text(0.5, 0.5, f"SHAP unavailable:\n{exc}", ha="center", va="center")
         pd.Series({"shap_error": str(exc)}).to_csv(output_dir / "figure8_shap_error.csv")
 
-    # 8D: MLP vs Logistic C 对比
-    ax_mlp = axes[1, 1]
-    cmp_rows = []
-    for target_col, target_label in targets.items():
-        valid = valid_store[target_col]
-        y = valid[target_col].astype(int)
-        lr_probs, lr_preds = _loo_predict(valid[mlp_feats], y, seed=seed)
-        mlp_probs, mlp_preds = _loo_predict(valid[mlp_feats], y, seed=seed, use_mlp=True)
-        cmp_rows.append({"Target": target_label, "Model": "Logistic C", "AUC": _metrics(y.values, lr_probs, lr_preds)["AUC"]})
-        cmp_rows.append({"Target": target_label, "Model": "MLP D", "AUC": _metrics(y.values, mlp_probs, mlp_preds)["AUC"]})
-    cmp_df = pd.DataFrame(cmp_rows)
-    cmp_df.to_csv(output_dir / "figure8_mlp_comparison.csv", index=False, encoding="utf-8-sig")
-    for i, target_label in enumerate(targets.values()):
-        sub = cmp_df[cmp_df["Target"] == target_label]
-        xpos = [i * 3, i * 3 + 1]
-        ax_mlp.bar(xpos, sub["AUC"].values, color=[PALETTE["delayed"], "#8172B3"], width=0.7)
-        ax_mlp.text(xpos[0], sub["AUC"].iloc[0] + 0.02, f"{sub['AUC'].iloc[0]:.2f}", ha="center", fontsize=8)
-        ax_mlp.text(xpos[1], sub["AUC"].iloc[1] + 0.02, f"{sub['AUC'].iloc[1]:.2f}", ha="center", fontsize=8)
-    ax_mlp.set_xticks([0.5, 3.5])
-    ax_mlp.set_xticklabels(list(targets.values()), fontsize=9)
-    ax_mlp.set_ylim(0, 1.08)
-    ax_mlp.set_ylabel("AUC (LOO-CV)")
-    ax_mlp.set_title("D. MLP concept validation vs Logistic C", pad=8)
-    ax_mlp.legend(
-        handles=[
-            mpatches.Patch(facecolor=PALETTE["delayed"], label="Logistic C"),
-            mpatches.Patch(facecolor="#8172B3", label="MLP D"),
-        ],
-        loc="upper right",
-        fontsize=8,
-        frameon=False,
-    )
-
-    finalize_figure(
-        fig,
-        "Figure 8. Predictive models: Logistic A/B/C + MLP validation (LOO-CV)",
-        hspace=0.38,
-        wspace=0.32,
-    )
+    finalize_figure(fig, "Figure 8. Factorial models A/B/C/E for extubation delay (LOO-CV)", wspace=0.32)
     save_figure(fig, output_dir, "figure8_prediction_roc")
 
-    metrics_df = pd.DataFrame(all_metrics)
-    metrics_df.to_csv(output_dir / "table2_model_performance.csv", index=False, encoding="utf-8-sig")
-    metrics_df.to_excel(output_dir / "table2_model_performance.xlsx", index=False)
+    # ── 写表 ──
+    main_df = pd.DataFrame(main_metrics)
+    supp_df = pd.DataFrame(supp_metrics) if supp_metrics else pd.DataFrame()
+
+    def _write(df: pd.DataFrame, stem: str, directory: Path):
+        directory.mkdir(parents=True, exist_ok=True)
+        df.to_csv(directory / f"{stem}.csv", index=False, encoding="utf-8-sig")
+        df.to_excel(directory / f"{stem}.xlsx", index=False)
+
+    _write(main_df, "table2_model_performance", output_dir)
+    _write(factorial_df, "table2_factorial_delta_auc", output_dir)
+    if not supp_df.empty:
+        _write(supp_df, "table2_model_performance_supplementary", output_dir)
+
     if tables_dir is not None:
-        tables_dir.mkdir(parents=True, exist_ok=True)
-        metrics_df.to_csv(tables_dir / "table2_model_performance.csv", index=False, encoding="utf-8-sig")
-        metrics_df.to_excel(tables_dir / "table2_model_performance.xlsx", index=False)
-    return metrics_df
+        _write(main_df, "table2_model_performance", tables_dir)
+        _write(factorial_df, "table2_factorial_delta_auc", tables_dir)
+        if not supp_df.empty:
+            _write(supp_df, "table2_model_performance_supplementary", tables_dir)
+
+    # 向后兼容：figures/ 下旧文件名指向主表
+    main_df.to_csv(output_dir / "table2_model_performance.csv", index=False, encoding="utf-8-sig")
+
+    return main_df

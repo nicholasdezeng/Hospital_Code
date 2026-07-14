@@ -22,9 +22,15 @@ from src.analysis.differential import run_figure4
 from src.analysis.inflammation_axis import run_figure5, run_figure6
 from src.analysis.mediation import run_figure7
 from src.analysis.microbiome_desc import run_figure1
-from src.analysis.multivariable import run_multivariable
+from src.analysis.multivariable import run_continuous_extubation, run_multivariable
 from src.analysis.prediction import run_prediction
 from src.analysis.sensitivity import run_sensitivity_cohorts
+from src.analysis.supplementary_tables import (
+    run_ae_descriptive,
+    run_genus_wilcoxon_table,
+    run_shannon_inflammation_matrix,
+    run_table1_supplement,
+)
 from src.data_loader import load_asv_table, load_clinical_excel, load_taxonomy
 from src.preprocessing import (
     add_outcome_groups,
@@ -50,8 +56,12 @@ FIGURE_CATALOG = {
 
 TABLE_CATALOG = {
     "table1": "Table 1 — 基线特征",
-    "table2": "Table 2 — 模型性能（随 Figure 8 生成）",
+    "table1_supplement": "Table 1-补充 — 两组 α 多样性",
+    "table2": "Table 2 — 模型性能 A/B/C/E（随 Figure 8）",
+    "table2_continuous": "Table 2 敏感性 — 拔管时间连续变量",
     "table3": "Table 3 — 多因素 Logistic",
+    "genus_wilcoxon": "属水平 Wilcoxon + FDR",
+    "ae_descriptive": "不良反应描述性",
     "sensitivity": "敏感性分析",
 }
 
@@ -253,11 +263,11 @@ def main(
     run_all = figures is None and tables is None
     if run_all:
         selected_figures = set(range(1, 10))
-        selected_tables = {"table1", "table2", "table3", "sensitivity"}
+        selected_tables = set(TABLE_CATALOG.keys())
     else:
         selected_figures = parse_selection(figures, valid=range(1, 10)) if figures is not None else set()
         selected_tables = (
-            parse_selection(tables, valid={"table1", "table2", "table3", "sensitivity"})
+            parse_selection(tables, valid=set(TABLE_CATALOG.keys()))
             if tables is not None
             else set()
         )
@@ -278,6 +288,12 @@ def main(
         modules_completed.append("table1_baseline")
         generated_files.append(str(tab_dir / "table1_baseline.csv"))
 
+    if "table1_supplement" in selected_tables:
+        print("\n▶ Table 1-补充 — 两组 α 多样性")
+        run_table1_supplement(clinical, tab_dir)
+        modules_completed.append("table1_supplement_diversity")
+        generated_files.append(str(tab_dir / "table1_supplement_diversity.csv"))
+
     figure_run_list = _resolve_dependencies(selected_figures)
     auto_deps = set(figure_run_list) - selected_figures
     if auto_deps:
@@ -287,7 +303,11 @@ def main(
         generated_files.append(_run_figure(fig_id, clinical, fig_dir, cfg, tab_dir))
         modules_completed.append(f"figure{fig_id}")
         if fig_id == 8:
-            modules_completed.extend(["table2_model_performance", "mlp_validation", "permutation_test"])
+            modules_completed.extend(["table2_model_performance", "table2_factorial", "mlp_validation", "permutation_test"])
+            generated_files.extend([
+                str(tab_dir / "table2_model_performance.csv"),
+                str(tab_dir / "table2_factorial_delta_auc.csv"),
+            ])
 
     if "table2" in selected_tables and 8 not in selected_figures and 8 not in figure_run_list:
         print("\n▶ Table 2 — 模型性能（需 Figure 8 逻辑）")
@@ -306,6 +326,29 @@ def main(
         run_multivariable(clinical, tab_dir)
         modules_completed.append("table3_multivariable_or")
         generated_files.append(str(tab_dir / "table3_multivariable_or.csv"))
+
+    if "table2_continuous" in selected_tables:
+        print("\n▶ Table 2 敏感性 — 拔管时间连续变量")
+        run_continuous_extubation(clinical, tab_dir)
+        modules_completed.append("table2_continuous_extubation")
+        generated_files.append(str(tab_dir / "table2_continuous_extubation.csv"))
+
+    if "genus_wilcoxon" in selected_tables:
+        print("\n▶ 属水平 Wilcoxon + FDR")
+        run_genus_wilcoxon_table(clinical, tab_dir)
+        modules_completed.append("table_genus_wilcoxon")
+        generated_files.append(str(tab_dir / "table_genus_wilcoxon.csv"))
+
+    if "ae_descriptive" in selected_tables:
+        print("\n▶ 不良反应描述性分析")
+        run_ae_descriptive(clinical, tab_dir)
+        modules_completed.append("table_ae_descriptive")
+        generated_files.append(str(tab_dir / "table_ae_descriptive.csv"))
+
+    # 数据核查：Shannon-炎症相关（优化方案 Step 0）
+    if run_all or "table1_supplement" in selected_tables:
+        run_shannon_inflammation_matrix(clinical, tab_dir)
+        generated_files.append(str(tab_dir / "table_shannon_inflammation_corr.csv"))
 
     if "sensitivity" in selected_tables:
         print("\n▶ 敏感性分析 — 严格 vs 放宽 QC")
@@ -381,7 +424,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--tables", "-t",
         metavar="SPEC",
-        help="要生成的表格: table1,table2,table3,sensitivity / all",
+        help="要生成的表格: table1,table1_supplement,table2,table2_continuous,table3,genus_wilcoxon,ae_descriptive,sensitivity / all",
     )
     parser.add_argument("--list", action="store_true", help="列出所有可选图表与用法")
     args = parser.parse_args()

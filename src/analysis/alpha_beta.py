@@ -101,13 +101,20 @@ def run_figure2(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     finalize_figure(fig, "Figure 2. Alpha diversity comparisons between outcome groups")
     save_figure(fig, output_dir, "figure2_alpha_diversity")
 
-    return pd.DataFrame(
-        [
-            {"comparison": "Shannon Early vs Delayed", "p": p},
-            {"comparison": "Shannon AE yes vs no", "p": p2},
-            {"comparison": "Chao1 Early vs Delayed", "p": p3},
-        ]
-    )
+    from src.utils.stats import cliffs_delta
+
+    early = clinical[clinical["extubation_group"] == "Early"]
+    delayed = clinical[clinical["extubation_group"] == "Delayed"]
+    stats_df = pd.DataFrame([
+        {"comparison": "Shannon Early vs Delayed", "p": p, "cliffs_delta": cliffs_delta(early["shannon"], delayed["shannon"])},
+        {"comparison": "Shannon AE yes vs no", "p": p2, "cliffs_delta": cliffs_delta(
+            clinical.loc[clinical["adverse_event"] == 0, "shannon"],
+            clinical.loc[clinical["adverse_event"] == 1, "shannon"],
+        )},
+        {"comparison": "Chao1 Early vs Delayed", "p": p3, "cliffs_delta": cliffs_delta(early["chao1"], delayed["chao1"])},
+    ])
+    stats_df.to_csv(output_dir / "figure2_alpha_stats.csv", index=False, encoding="utf-8-sig")
+    return stats_df
 
 
 def run_figure3(clinical: pd.DataFrame, output_dir: Path, permutations: int = 999) -> dict:
@@ -131,6 +138,15 @@ def run_figure3(clinical: pd.DataFrame, output_dir: Path, permutations: int = 99
         "permutations": permutations, "n_samples": len(sample_ids),
     }])
     perm_df.to_csv(output_dir / "figure3_permanova.csv", index=False, encoding="utf-8-sig")
+
+    from src.utils.stats import betadisper_test
+    bd = betadisper_test(dist, groups)
+    pd.DataFrame([{
+        "test": "betadisper",
+        "p": bd["p"],
+        "statistic": bd["statistic"],
+        "groups": ",".join(bd["groups"]),
+    }]).to_csv(output_dir / "figure3_betadisper.csv", index=False, encoding="utf-8-sig")
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 

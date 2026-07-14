@@ -32,6 +32,14 @@ def pielou_j(counts: np.ndarray) -> float:
     return shannon(counts) / np.log(s_obs)
 
 
+def simpson(counts: np.ndarray) -> float:
+    counts = counts[counts > 0]
+    if len(counts) == 0:
+        return 0.0
+    p = counts / counts.sum()
+    return float(1.0 - np.sum(p ** 2))
+
+
 def alpha_diversity_table(asv: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for sample_id, row in asv.iterrows():
@@ -42,6 +50,7 @@ def alpha_diversity_table(asv: pd.DataFrame) -> pd.DataFrame:
                 "shannon": shannon(counts),
                 "chao1": chao1(counts),
                 "pielou_j": pielou_j(counts),
+                "simpson": simpson(counts),
                 "observed_asv": int(np.sum(counts > 0)),
             }
         )
