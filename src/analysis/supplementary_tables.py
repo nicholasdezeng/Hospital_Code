@@ -9,7 +9,7 @@ import pandas as pd
 from scipy import stats
 
 from src.utils.microbiome import aggregate_taxonomy, relative_abundance
-from src.utils.stats import cliffs_delta, compare_continuous, fdr_correct, format_p, spearman_with_fdr
+from src.utils.stats import cliffs_delta, fdr_correct, format_p, spearman_with_fdr
 
 
 def _summarize_continuous(series: pd.Series, as_median: bool = False) -> str:
@@ -37,7 +37,14 @@ def run_table1_supplement(clinical: pd.DataFrame, output_dir: Path) -> pd.DataFr
     for label, col in metrics:
         if col not in clinical.columns:
             continue
-        p, method = compare_continuous(early[col], delayed[col])
+        # 优化方案第3.2(A) 层次一：四项多样性指标统一采用 Mann-Whitney U（非参数）
+        e = pd.to_numeric(early[col], errors="coerce").dropna()
+        d = pd.to_numeric(delayed[col], errors="coerce").dropna()
+        if len(e) >= 3 and len(d) >= 3:
+            _, p = stats.mannwhitneyu(e, d, alternative="two-sided")
+            method = "Mann-Whitney U"
+        else:
+            p, method = np.nan, "insufficient"
         delta = cliffs_delta(early[col], delayed[col])
         rows.append(
             {

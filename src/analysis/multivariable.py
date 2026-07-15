@@ -49,11 +49,20 @@ def _fit_logistic(df: pd.DataFrame, outcome: str, predictors: list[str]) -> pd.D
     return pd.DataFrame(rows)
 
 
-def _fit_ols(df: pd.DataFrame, outcome: str, predictors: list[str]) -> pd.DataFrame:
+def _fit_ols(df: pd.DataFrame, outcome: str, predictors: list[str], *, standardize: bool = False) -> pd.DataFrame:
     cols = [outcome] + predictors
     sub = df[cols].dropna()
     if len(sub) < len(predictors) + 5:
         return pd.DataFrame()
+
+    if standardize:
+        # 优化方案第3.2(C)：报告标准化回归系数(β)，使不同量纲变量的效应大小可横向比较
+        z = sub.copy()
+        for c in cols:
+            s = z[c].astype(float)
+            sd = s.std(ddof=0)
+            z[c] = (s - s.mean()) / sd if sd > 0 else 0.0
+        sub = z
 
     y = sub[outcome]
     X = sm.add_constant(sub[predictors])
@@ -122,7 +131,7 @@ def run_continuous_extubation(clinical: pd.DataFrame, output_dir: Path) -> pd.Da
     df = clinical.copy()
     df["log_extubation_time"] = np.log(pd.to_numeric(df["extubation_time_min"], errors="coerce"))
     predictors = CORE_PREDICTORS + [MICROBIOME_PREDICTOR, INFLAMMATION_PREDICTOR]
-    res = _fit_ols(df, "log_extubation_time", predictors)
+    res = _fit_ols(df, "log_extubation_time", predictors, standardize=True)
     if res.empty:
         res.to_csv(output_dir / "table2_continuous_extubation.csv", index=False, encoding="utf-8-sig")
         return res
@@ -135,9 +144,11 @@ def run_continuous_extubation(clinical: pd.DataFrame, output_dir: Path) -> pd.Da
     }
     res["outcome_label"] = "log(拔管时间)"
     res["变量"] = res["variable"].map(lambda v: var_cn.get(v, v))
-    res["β(95%CI)"] = res.apply(lambda r: f"{r['beta']:.3f} ({r['CI_low']:.3f}-{r['CI_high']:.3f})", axis=1)
+    res["标准化β(95%CI)"] = res.apply(
+        lambda r: f"{r['beta']:.3f} ({r['CI_low']:.3f}-{r['CI_high']:.3f})", axis=1
+    )
     res["P_fmt"] = res["P_value"].map(format_p)
-    out = res[["outcome_label", "变量", "β(95%CI)", "P_fmt", "R2", "N"]].rename(
+    out = res[["outcome_label", "变量", "标准化β(95%CI)", "P_fmt", "R2", "N"]].rename(
         columns={"P_fmt": "P值", "R2": "R²"}
     )
     out.to_csv(output_dir / "table2_continuous_extubation.csv", index=False, encoding="utf-8-sig")
